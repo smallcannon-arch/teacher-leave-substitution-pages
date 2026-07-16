@@ -19,8 +19,8 @@ import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js"
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.6";
-import { APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.3.6";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.7";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.3.7";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
@@ -234,7 +234,7 @@ function render() {
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">鐘</div>
-          <div><strong>課務核算台</strong><small>Substitute Fee Desk</small></div>
+          <div><strong>${escapeHtml(APP_NAME)}</strong><small>Substitute Fee Desk</small></div>
         </div>
         <button class="setup-shortcut ${activePage === "settings" ? "active" : ""}" data-nav="settings">
           <span>學期初先設定</span>
@@ -298,7 +298,7 @@ function renderAccessGate() {
   app.innerHTML = `
     <main class="login-gate">
       <section class="login-gate-card" aria-labelledby="login-gate-title">
-        <div class="login-gate-brand"><span class="brand-mark">鐘</span><div><strong>課務核算台</strong><small>Substitute Fee Desk</small></div></div>
+        <div class="login-gate-brand"><span class="brand-mark">鐘</span><div><strong>${escapeHtml(APP_NAME)}</strong><small>Substitute Fee Desk</small></div></div>
         <div class="login-gate-heading"><span>正式使用入口</span><h1 id="login-gate-title">使用 Google 教育帳號登入</h1><p>只要按一次 Google 登入，系統會在確認帳號後接續 Drive 資料授權，完成後直接進入系統。</p></div>
         <div class="notice warning account-rule"><strong>登入規定</strong><br />一般使用者請使用縣市或學校核發、網域以 <b>.edu.tw</b> 結尾的 Google Workspace 教育帳號。個人 Gmail 不開放；中央管理帳號除外。</div>
         <div class="drive-connection-reason">
@@ -952,7 +952,7 @@ function bindErrorReportModal() {
     const reportText = buildErrorReportText(details);
     const screenshot = screenshotInput?.files?.[0];
     const sharePayload = screenshot ? {
-      title: `課務核算台錯誤回報 v${APP_VERSION}`,
+      title: `${APP_NAME}錯誤回報 v${APP_VERSION}`,
       text: `請傳送給開發者 ${SUPPORT_EMAIL}\n\n${reportText}`,
       files: [screenshot],
     } : null;
