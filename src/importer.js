@@ -29,7 +29,14 @@ export function parseDelimited(text, delimiter = detectDelimiter(text)) {
   let row = [];
   let field = "";
   let quoted = false;
+  let fieldWasQuoted = false;
   const source = String(text || "").replace(/^\uFEFF/, "");
+
+  const finishField = () => {
+    row.push(fieldWasQuoted ? field : field.trim());
+    field = "";
+    fieldWasQuoted = false;
+  };
 
   for (let index = 0; index < source.length; index += 1) {
     const char = source[index];
@@ -38,27 +45,26 @@ export function parseDelimited(text, delimiter = detectDelimiter(text)) {
         field += '"';
         index += 1;
       } else {
+        if (!quoted && field === "") fieldWasQuoted = true;
         quoted = !quoted;
       }
       continue;
     }
     if (!quoted && char === delimiter) {
-      row.push(field.trim());
-      field = "";
+      finishField();
       continue;
     }
     if (!quoted && (char === "\n" || char === "\r")) {
       if (char === "\r" && source[index + 1] === "\n") index += 1;
-      row.push(field.trim());
+      finishField();
       if (row.some((cell) => cell !== "")) rows.push(row);
       row = [];
-      field = "";
       continue;
     }
     field += char;
   }
 
-  row.push(field.trim());
+  finishField();
   if (row.some((cell) => cell !== "")) rows.push(row);
   return rows;
 }

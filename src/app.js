@@ -6,27 +6,27 @@ import {
   REASON_CODES,
   burdenLabel,
   leaveLabel,
-} from "./rules.js?v=0.4.0";
+} from "./rules.js?v=0.4.2";
 import {
   allocationBalance,
   calculateCase,
   caseTotals,
   RULE_VERSION,
   roundMoney,
-} from "./calculator.js?v=0.4.0";
-import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.0";
-import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.0";
-import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.0";
-import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.0";
-import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.0";
-import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.0";
-import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.0";
-import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.0";
-import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.0";
-import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.0";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.0";
-import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.0";
-import { GoogleCloudService } from "./google-cloud.js?v=0.4.0";
+} from "./calculator.js?v=0.4.2";
+import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.2";
+import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.2";
+import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.2";
+import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.2";
+import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.2";
+import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.2";
+import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.2";
+import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.2";
+import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.2";
+import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.2";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.2";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.2";
+import { GoogleCloudService } from "./google-cloud.js?v=0.4.2";
 
 const app = document.querySelector("#app");
 let state = localStorageAdapter.load();
@@ -35,7 +35,7 @@ let draftCase = null;
 let modal = null;
 let personModalType = "staff";
 let toastTimer = null;
-let cloudUi = { phase: "initializing", message: "正在準備 Google 登入…", profile: null, connected: false };
+let cloudUi = { phase: "initializing", message: "正在準備 Google 登入…", profile: null, connected: false, syncHealthy: false };
 let pendingDriveChoice = null;
 let adminAccountUi = { loaded: false, loading: false, error: "", accounts: [] };
 const cloudAccessRequired = requiresCloudLogin(globalThis.location?.hostname);
@@ -44,13 +44,15 @@ const googleCloud = new GoogleCloudService({
   apiBaseUrl: APP_CONFIG.apiBaseUrl,
   getState: () => state,
   applyRemoteState: (remoteState) => {
+    const pendingDraft = draftCase ? structuredClone(draftCase) : null;
     localStorageAdapter.save(remoteState);
     state = localStorageAdapter.load();
-    draftCase = null;
-    activePage = "dashboard";
+    draftCase = pendingDraft;
+    activePage = pendingDraft ? "case" : "dashboard";
   },
   chooseDriveData: (details) => chooseDriveData(details),
   onChange: (snapshot) => {
+    if (activePage === "case" && draftCase && document.querySelector("#case-form")) syncDraftFromForm();
     cloudUi = snapshot;
     if (!snapshot.profile?.is_central_admin) adminAccountUi = { loaded: false, loading: false, error: "", accounts: [] };
     render();
@@ -175,6 +177,7 @@ function defaultPublicFundSource(preferredId = "") {
 function savedTimeText() {
   const value = state.meta?.lastSavedAt;
   const driveMode = state.meta?.storageMode === "drive" && cloudUi.connected;
+  if (driveMode && ["error", "reauthorization-needed"].includes(cloudUi.phase)) return "Drive 同步待處理・修改已存於本機";
   if (!value) return driveMode ? "Google Drive 資料已載入" : "本機資料已載入";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return driveMode ? "Google Drive 已同步" : "本機已儲存";
@@ -200,6 +203,8 @@ function saveState(action = "update", entityId = "system") {
 function accountButtonText() {
   if (!cloudUi.profile) return "Google 登入";
   const name = cloudUi.profile.name || cloudUi.profile.email || "Google 帳號";
+  if (cloudUi.phase === "authorizing-drive") return `${name}・重新連接中`;
+  if (["error", "reauthorization-needed"].includes(cloudUi.phase)) return `${name}・同步待處理`;
   return cloudUi.connected ? `${name}・已連接` : `${name}・連接 Drive`;
 }
 
@@ -240,7 +245,7 @@ function render() {
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">鐘</div>
-          <div><strong>${escapeHtml(APP_NAME)}</strong><small>Substitute Fee Desk</small></div>
+          <div class="brand-copy"><strong><span>學校鐘點代課費</span><span>核算平台</span></strong><small>Substitute Fee Desk</small></div>
         </div>
         <button class="setup-shortcut ${activePage === "settings" ? "active" : ""}" data-nav="settings">
           <span>學期初先設定</span>
@@ -256,16 +261,17 @@ function render() {
         </nav>
         <button class="sidebar-support-link" type="button" data-open-error-report aria-label="回報系統錯誤"><span>!</span>錯誤回報</button>
         <div class="sidebar-foot">
-          規則版本：${escapeHtml(RULE_VERSION)}<br />
-          現行國小鐘點：${formatMoney(state.config.hourlyRate)} 元<br />
-          個案資料：${state.meta?.storageMode === "drive" && cloudUi.connected ? "個人 Google Drive" : "瀏覽器本機快取"}
+          <div class="sidebar-meta">規則版本：${escapeHtml(RULE_VERSION)}<br />
+            現行國小鐘點：${formatMoney(state.config.hourlyRate)} 元<br />
+            個案資料：${state.meta?.storageMode === "drive" && cloudUi.connected ? "個人 Google Drive" : "瀏覽器本機快取"}</div>
+          <div class="sidebar-copyright"><strong>© 2026 江志宏</strong><span>學校鐘點代課費核算平台</span><span>系統版本 ${escapeHtml(APP_VERSION)}</span><a href="mailto:${escapeHtml(SUPPORT_EMAIL)}">${escapeHtml(SUPPORT_EMAIL)}</a></div>
         </div>
       </aside>
       <main class="main">
         <header class="topbar">
           <div><div class="topbar-title">${escapeHtml(state.config.schoolName)}</div><div class="topbar-sub">${state.config.academicYear} 學年度第 ${state.config.term} 學期</div></div>
           <div class="topbar-actions">
-            <div class="account-chip save-chip"><span class="account-dot ${cloudUi.connected ? "connected" : ""}"></span>${savedTimeText()}</div>
+            <div class="account-chip save-chip"><span class="account-dot ${cloudUi.syncHealthy ? "connected" : ""}"></span>${savedTimeText()}</div>
             <button class="account-chip topbar-report-button" type="button" data-open-error-report aria-label="回報系統錯誤"><span class="report-mark">!</span>錯誤回報</button>
             <button class="account-chip account-button" type="button" id="open-access"><span class="google-mark">G</span>${escapeHtml(accountButtonText())}</button>
           </div>
@@ -843,9 +849,19 @@ function renderModal() {
     const busy = ["initializing", "verifying", "authorizing-drive", "loading-drive", "saving"].includes(cloudUi.phase);
     let accountAction = "";
     if (cloudUi.connected && cloudUi.profile) {
-      accountAction = `<div class="cloud-profile connected"><div><strong>${escapeHtml(cloudUi.profile.name || cloudUi.profile.email)}</strong><span>${escapeHtml(cloudUi.profile.email)}</span></div><span class="badge ready">Drive 已連接</span></div>
-        <div class="notice success">已自動讀取個人 Drive 主檔；每次新增或修改仍先存本機，再自動同步至 Drive。</div>
-        <div class="button-row"><button class="btn btn-primary" type="button" data-close-modal>開始使用</button><button class="btn btn-secondary" type="button" id="google-sign-out">登出</button></div>`;
+      const needsReconnect = cloudUi.phase === "reauthorization-needed";
+      const reconnecting = cloudUi.phase === "authorizing-drive";
+      const needsAttention = needsReconnect || reconnecting || cloudUi.phase === "error";
+      const connectionMessage = needsReconnect
+        ? "Drive 連線已到期；修改仍保存在本機。按下重新連接後，系統會補同步待處理資料。"
+        : reconnecting
+          ? "正在重新連接 Google Drive，完成後會自動補同步待處理資料。"
+        : cloudUi.phase === "error"
+          ? (cloudUi.message || "Drive 同步暫時失敗；修改仍保存在本機，系統會在後續修改時重試。")
+          : "已自動讀取個人 Drive 主檔；每次新增或修改仍先存本機，再自動同步至 Drive。";
+      accountAction = `<div class="cloud-profile ${needsAttention ? "" : "connected"}"><div><strong>${escapeHtml(cloudUi.profile.name || cloudUi.profile.email)}</strong><span>${escapeHtml(cloudUi.profile.email)}</span></div><span class="badge ${needsAttention ? "pending" : "ready"}">${needsReconnect ? "待重新連接" : reconnecting ? "重新連接中" : needsAttention ? "同步待處理" : "Drive 已連接"}</span></div>
+        <div class="notice ${needsAttention ? "warning" : "success"}">${escapeHtml(connectionMessage)}</div>
+        <div class="button-row">${needsReconnect ? `<button class="btn btn-primary" type="button" id="authorize-drive" ${busy ? "disabled" : ""}>重新連接 Drive</button>` : reconnecting ? '<button class="btn btn-primary" type="button" disabled>重新連接中…</button>' : '<button class="btn btn-primary" type="button" data-close-modal>開始使用</button>'}<button class="btn btn-secondary" type="button" id="google-sign-out">登出</button></div>`;
     } else if (cloudUi.profile) {
       accountAction = `<div class="cloud-profile"><div><strong>${escapeHtml(cloudUi.profile.name || cloudUi.profile.email)}</strong><span>${escapeHtml(cloudUi.profile.email)}${cloudUi.profile.is_central_admin ? "・中央管理者" : "・教育帳號"}</span></div><span class="badge pending">帳號已確認</span></div>
         <button class="btn btn-primary full-button" type="button" id="authorize-drive" ${busy ? "disabled" : ""}>繼續授權資料儲存</button>

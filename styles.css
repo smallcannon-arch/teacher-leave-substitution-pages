@@ -52,8 +52,10 @@ button {
 .sidebar {
   position: sticky;
   top: 0;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
-  padding: 24px 18px;
+  padding: 16px 14px;
   color: #fff;
   background: var(--navy);
   overflow-y: auto;
@@ -61,9 +63,9 @@ button {
 
 .brand {
   display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 4px 8px 22px;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 2px 6px 14px;
 }
 
 .brand-mark {
@@ -83,6 +85,15 @@ button {
   display: block;
 }
 
+.brand-copy {
+  min-width: 0;
+}
+
+.brand strong span {
+  display: block;
+  white-space: nowrap;
+}
+
 .brand strong {
   letter-spacing: 0.04em;
   line-height: 1.35;
@@ -99,7 +110,7 @@ button {
   width: 100%;
   gap: 3px;
   margin: 0 0 8px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1px solid rgba(255, 190, 104, 0.48);
   border-radius: 12px;
   color: #fff;
@@ -131,7 +142,7 @@ button {
 }
 
 .nav-group-label {
-  padding: 18px 12px 8px;
+  padding: 10px 10px 5px;
   color: #829baa;
   font-size: 12px;
   font-weight: 800;
@@ -143,8 +154,8 @@ button {
   width: 100%;
   align-items: center;
   gap: 11px;
-  margin: 3px 0;
-  padding: 11px 12px;
+  margin: 2px 0;
+  padding: 8px 10px;
   border: 0;
   border-radius: 10px;
   color: #ccdae1;
@@ -162,6 +173,10 @@ button {
   box-shadow: inset 3px 0 0 #6ed3c8;
 }
 
+.sidebar nav {
+  flex: 0 0 auto;
+}
+
 .nav-icon {
   width: 24px;
   color: #79c8c0;
@@ -170,13 +185,43 @@ button {
 }
 
 .sidebar-foot {
-  margin-top: 26px;
-  padding: 14px;
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 11px;
   border: 1px solid rgba(255, 255, 255, 0.13);
   border-radius: 12px;
   color: #b7c7cf;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sidebar-copyright {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.13);
+}
+
+.sidebar-copyright strong {
+  color: #fff;
   font-size: 13px;
-  line-height: 1.6;
+}
+
+.sidebar-copyright span {
+  color: #b7c7cf;
+  font-size: 12px;
+}
+
+.sidebar-copyright a {
+  color: #91ddd4;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.sidebar-copyright a:hover {
+  text-decoration: underline;
 }
 
 .main {
@@ -989,6 +1034,7 @@ h3 {
 }
 
 .main-footer {
+  display: none;
   width: min(1476px, calc(100% - 36px));
   margin: 0 auto 20px;
 }
@@ -2140,6 +2186,7 @@ td select {
   }
 
   .main-footer {
+    display: grid;
     width: calc(100% - 24px);
   }
 
@@ -2156,6 +2203,7 @@ td select {
     position: static;
     height: auto;
     padding: 12px;
+    overflow: visible;
   }
 
   .brand,
@@ -2166,8 +2214,10 @@ td select {
 
   .sidebar nav {
     display: flex;
+    flex: none;
     gap: 4px;
     overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .setup-shortcut {

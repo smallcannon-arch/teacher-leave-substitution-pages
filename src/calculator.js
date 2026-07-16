@@ -1,5 +1,5 @@
-import { BURDEN, determineBurden, ruleMeta } from "./rules.js?v=0.4.0";
-import { calculationInputSignature } from "./case-integrity.js?v=0.4.0";
+import { BURDEN, determineBurden, ruleMeta } from "./rules.js?v=0.4.2";
+import { calculationInputSignature } from "./case-integrity.js?v=0.4.2";
 
 export const RULE_VERSION = "rules-0.2+decision-2026.07";
 export const RATE_VERSION = "114.09.01-current";

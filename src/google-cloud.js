@@ -1,9 +1,25 @@
-import { createBackup, parseBackup } from "./backup.js?v=0.4.0";
+import { createBackup, parseBackup } from "./backup.js?v=0.4.2";
 
 const DRIVE_FILE_NAME = "substitute-fee-desk-data-v1.json";
 const DEFAULT_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3";
+const TOKEN_RENEWAL_LEAD_MS = 5 * 60 * 1000;
+const TOKEN_REQUEST_TIMEOUT_MS = 15 * 1000;
+
+export function tokenExpiresAt(token = "") {
+  try {
+    const encoded = String(token).split(".")[1];
+    if (!encoded || typeof globalThis.atob !== "function") return 0;
+    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
+    const payload = JSON.parse(globalThis.atob(normalized + padding));
+    const expiresAt = Number(payload.exp) * 1000;
+    return Number.isFinite(expiresAt) ? expiresAt : 0;
+  } catch {
+    return 0;
+  }
+}
 
 function timestamp(value) {
   const time = Date.parse(value || "");
@@ -69,6 +85,7 @@ export class GoogleCloudService {
     this.clientId = "";
     this.driveScope = DEFAULT_DRIVE_SCOPE;
     this.idToken = "";
+    this.idTokenExpiresAt = 0;
     this.accessToken = "";
     this.accessTokenExpiresAt = 0;
     this.driveFileId = "";
@@ -79,6 +96,8 @@ export class GoogleCloudService {
     this.saveRetryTimer = null;
     this.saveRetryCount = 0;
     this.authHeartbeatTimer = null;
+    this.identityRefresh = null;
+    this.driveTokenExpiryTimer = null;
   }
 
   snapshot() {
@@ -87,7 +106,8 @@ export class GoogleCloudService {
       message: this.message,
       configured: Boolean(this.clientId),
       profile: this.profile ? { ...this.profile } : null,
-      connected: ["connected", "saving", "error"].includes(this.phase) && Boolean(this.driveFileId),
+      connected: ["connected", "saving", "error", "reauthorization-needed", "authorizing-drive"].includes(this.phase) && Boolean(this.driveFileId),
+      syncHealthy: ["connected", "saving"].includes(this.phase) && Boolean(this.driveFileId),
     };
   }
 
@@ -113,7 +133,7 @@ export class GoogleCloudService {
       globalThis.google.accounts.id.initialize({
         client_id: this.clientId,
         callback: (responseValue) => this.handleCredential(responseValue),
-        auto_select: false,
+        auto_select: true,
         cancel_on_tap_outside: true,
       });
       this.tokenClient = globalThis.google.accounts.oauth2.initTokenClient({
@@ -178,23 +198,93 @@ export class GoogleCloudService {
     });
   }
 
-  startAuthorizationHeartbeat() {
+  finishIdentityRefresh(error, profile = null) {
+    const pending = this.identityRefresh;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.identityRefresh = null;
+    if (error) pending.reject(error);
+    else pending.resolve(profile);
+  }
+
+  refreshIdentityToken() {
+    if (this.identityRefresh) return this.identityRefresh.promise;
+    const identityApi = globalThis.google?.accounts?.id;
+    if (!this.profile || typeof identityApi?.prompt !== "function") {
+      return Promise.reject(new Error("Google 登入需要重新確認"));
+    }
+
+    let resolvePromise;
+    let rejectPromise;
+    const promise = new Promise((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+    const timer = setTimeout(() => {
+      this.finishIdentityRefresh(new Error("Google 登入續期逾時"));
+    }, TOKEN_REQUEST_TIMEOUT_MS);
+    timer?.unref?.();
+    this.identityRefresh = { promise, resolve: resolvePromise, reject: rejectPromise, timer };
+
+    try {
+      identityApi.prompt((notification) => {
+        if (!this.identityRefresh) return;
+        const unavailable = notification?.isNotDisplayed?.()
+          || notification?.isSkippedMoment?.()
+          || notification?.isDismissedMoment?.();
+        if (unavailable) this.finishIdentityRefresh(new Error("Google 登入需要重新確認"));
+      });
+    } catch (error) {
+      this.finishIdentityRefresh(error);
+    }
+    return promise;
+  }
+
+  nextAuthorizationCheckDelay() {
+    if (!this.idTokenExpiresAt) return this.authHeartbeatMs;
+    const untilRenewal = this.idTokenExpiresAt - Date.now() - TOKEN_RENEWAL_LEAD_MS;
+    return Math.max(1000, Math.min(this.authHeartbeatMs, untilRenewal));
+  }
+
+  requireReauthentication(message = "Google 登入已到期，請重新登入；尚未同步的修改仍保存在本機") {
+    this.signOut();
+    this.update("denied", message);
+  }
+
+  startAuthorizationHeartbeat(delay = this.nextAuthorizationCheckDelay()) {
     this.stopAuthorizationHeartbeat();
     if (!this.idToken || !this.authHeartbeatMs) return;
     this.authHeartbeatTimer = setTimeout(async () => {
       this.authHeartbeatTimer = null;
       try {
-        this.profile = await this.apiRequest("/auth/me");
-        this.startAuthorizationHeartbeat();
-      } catch (error) {
-        if ([401, 403].includes(error.status)) {
-          this.signOut();
-          this.update("denied", error.message || "此帳號目前無法使用系統");
-          return;
+        if (this.idTokenExpiresAt && Date.now() >= this.idTokenExpiresAt - TOKEN_RENEWAL_LEAD_MS) {
+          await this.refreshIdentityToken();
+        } else {
+          this.profile = await this.apiRequest("/auth/me");
         }
         this.startAuthorizationHeartbeat();
+      } catch (error) {
+        if (error.status === 403) {
+          this.requireReauthentication(error.message || "此帳號目前無法使用系統");
+          return;
+        }
+        if (error.status === 401) {
+          try {
+            await this.refreshIdentityToken();
+            this.startAuthorizationHeartbeat();
+            return;
+          } catch {
+            this.requireReauthentication();
+            return;
+          }
+        }
+        if (this.idTokenExpiresAt && Date.now() >= this.idTokenExpiresAt) {
+          this.requireReauthentication();
+          return;
+        }
+        this.startAuthorizationHeartbeat(Math.min(this.authHeartbeatMs, 60 * 1000));
       }
-    }, this.authHeartbeatMs);
+    }, Math.max(0, Number(delay) || this.authHeartbeatMs));
     this.authHeartbeatTimer?.unref?.();
   }
 
@@ -204,12 +294,20 @@ export class GoogleCloudService {
   }
 
   async handleCredential(response) {
+    const renewing = Boolean(this.profile);
+    const previousToken = this.idToken;
+    const previousExpiresAt = this.idTokenExpiresAt;
     try {
       this.idToken = response?.credential || "";
       if (!this.idToken) throw new Error("Google 未回傳登入憑證");
-      this.update("verifying", "正在由伺服端確認帳號資格…");
+      this.idTokenExpiresAt = tokenExpiresAt(this.idToken);
+      if (!renewing) this.update("verifying", "正在由伺服端確認帳號資格…");
       this.profile = await this.apiRequest("/auth/me");
       this.startAuthorizationHeartbeat();
+      if (renewing) {
+        this.finishIdentityRefresh(null, this.profile);
+        return;
+      }
       if (this.autoConnectDrive && this.tokenClient) {
         this.update("authorizing-drive", "帳號已確認，正在接續 Google Drive 資料儲存授權…");
         try {
@@ -222,8 +320,15 @@ export class GoogleCloudService {
       }
       this.update("signed-in", "帳號已確認，請繼續授權資料儲存");
     } catch (error) {
+      if (renewing) {
+        this.idToken = previousToken;
+        this.idTokenExpiresAt = previousExpiresAt;
+        this.finishIdentityRefresh(error);
+        return;
+      }
       this.stopAuthorizationHeartbeat();
       this.idToken = "";
+      this.idTokenExpiresAt = 0;
       this.profile = null;
       this.update("denied", error.message || "此帳號無法使用系統");
     }
@@ -238,19 +343,42 @@ export class GoogleCloudService {
     this.tokenClient.requestAccessToken(driveTokenRequestOptions(this.profile.email));
   }
 
+  scheduleDriveTokenExpiry() {
+    clearTimeout(this.driveTokenExpiryTimer);
+    const delay = Math.max(0, this.accessTokenExpiresAt - Date.now());
+    this.driveTokenExpiryTimer = setTimeout(() => this.markDriveReauthorizationNeeded(), delay);
+    this.driveTokenExpiryTimer?.unref?.();
+  }
+
+  markDriveReauthorizationNeeded() {
+    clearTimeout(this.driveTokenExpiryTimer);
+    this.driveTokenExpiryTimer = null;
+    this.accessToken = "";
+    this.accessTokenExpiresAt = 0;
+    if (this.driveFileId) {
+      this.update("reauthorization-needed", "Drive 連線已到期；修改仍保存在本機，請按帳號按鈕重新連接後補同步");
+    }
+  }
+
   async handleDriveToken(response) {
     if (!response?.access_token || response.error) {
-      this.update("signed-in", "Google Drive 授權未完成，資料仍保存在本機");
+      this.update(this.driveFileId ? "reauthorization-needed" : "signed-in", "Google Drive 授權未完成，資料仍保存在本機");
       return;
     }
     const requestedScopes = String(this.driveScope || "").split(/\s+/).filter(Boolean);
     const scopeChecker = globalThis.google?.accounts?.oauth2?.hasGrantedAllScopes;
     if (requestedScopes.length && typeof scopeChecker === "function" && !scopeChecker(response, ...requestedScopes)) {
-      this.update("signed-in", "尚未同意資料儲存權限，請按下方按鈕重新授權");
+      this.update(this.driveFileId ? "reauthorization-needed" : "signed-in", "尚未同意資料儲存權限，請按下方按鈕重新授權");
       return;
     }
     this.accessToken = response.access_token;
     this.accessTokenExpiresAt = Date.now() + Math.max(0, Number(response.expires_in || 3600) - 60) * 1000;
+    this.scheduleDriveTokenExpiry();
+    if (this.driveFileId) {
+      this.update("connected", this.pendingState ? "Google Drive 已重新連接，正在補同步本機修改" : "Google Drive 已重新連接");
+      if (this.pendingState) queueMicrotask(() => this.flushSave());
+      return;
+    }
     try {
       await this.connectDrive();
     } catch (error) {
@@ -260,15 +388,15 @@ export class GoogleCloudService {
 
   async driveFetch(url, options = {}) {
     if (!this.accessToken || Date.now() >= this.accessTokenExpiresAt) {
-      this.accessToken = "";
-      throw new Error("Google Drive 授權已過期，請重新連接");
+      this.markDriveReauthorizationNeeded();
+      throw new Error("Google Drive 連線已到期，請按帳號按鈕重新連接");
     }
     const headers = new Headers(options.headers || {});
     headers.set("Authorization", `Bearer ${this.accessToken}`);
     const response = await fetch(url, { ...options, headers });
     if (response.status === 401) {
-      this.accessToken = "";
-      throw new Error("Google Drive 授權已過期，請重新連接");
+      this.markDriveReauthorizationNeeded();
+      throw new Error("Google Drive 連線已到期，請按帳號按鈕重新連接");
     }
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
@@ -374,12 +502,16 @@ export class GoogleCloudService {
   }
 
   queueSave(state) {
-    if (!this.driveFileId || !this.accessToken || !["connected", "saving", "error"].includes(this.phase)) return;
+    if (!this.driveFileId || !["connected", "saving", "error", "reauthorization-needed"].includes(this.phase)) return;
     this.pendingState = structuredClone(state);
     clearTimeout(this.saveTimer);
     clearTimeout(this.saveRetryTimer);
     this.saveRetryTimer = null;
     this.saveRetryCount = 0;
+    if (!this.accessToken || Date.now() >= this.accessTokenExpiresAt || this.phase === "reauthorization-needed") {
+      this.markDriveReauthorizationNeeded();
+      return;
+    }
     if (this.phase === "error") this.update("connected", "偵測到新修改，將重新同步 Google Drive");
     this.saveTimer = setTimeout(() => this.flushSave(), 850);
   }
@@ -399,6 +531,10 @@ export class GoogleCloudService {
       this.update("connected", "Google Drive 已同步");
     } catch (error) {
       if (!this.pendingState) this.pendingState = nextState;
+      if (this.phase === "reauthorization-needed") {
+        this.update("reauthorization-needed", `${error.message}；修改仍保存在本機，重新連接後會自動補同步`);
+        return;
+      }
       this.saveRetryCount += 1;
       const willRetry = this.saveRetryCount <= 3;
       const retryDelay = Math.min(1500 * (2 ** (this.saveRetryCount - 1)), 6000);
@@ -423,7 +559,11 @@ export class GoogleCloudService {
     this.saveRetryTimer = null;
     this.saveRetryCount = 0;
     this.stopAuthorizationHeartbeat();
+    this.finishIdentityRefresh(new Error("已登出"));
+    clearTimeout(this.driveTokenExpiryTimer);
+    this.driveTokenExpiryTimer = null;
     this.idToken = "";
+    this.idTokenExpiresAt = 0;
     this.accessToken = "";
     this.accessTokenExpiresAt = 0;
     this.driveFileId = "";
