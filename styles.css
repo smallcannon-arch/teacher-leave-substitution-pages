@@ -232,6 +232,33 @@ button {
   background: #f4fbf9;
 }
 
+.topbar-report-button {
+  color: var(--teal-dark);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.topbar-report-button:hover {
+  border-color: #8dbeb6;
+  background: #eef8f6;
+}
+
+.report-mark {
+  display: grid;
+  width: 19px;
+  height: 19px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--teal);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.sidebar-support-link {
+  display: none;
+}
+
 .google-mark {
   display: grid;
   width: 22px;
@@ -2092,6 +2119,33 @@ td select {
 
   .nav-button {
     min-width: max-content;
+  }
+
+  .sidebar-support-link {
+    display: flex;
+    width: fit-content;
+    align-items: center;
+    gap: 7px;
+    margin: 10px 0 0 auto;
+    padding: 8px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 999px;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 13px;
+    font-weight: 800;
+    text-decoration: none;
+  }
+
+  .sidebar-support-link span {
+    display: grid;
+    width: 18px;
+    height: 18px;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--navy);
+    background: #d7fbf5;
+    font-size: 11px;
   }
 
   .topbar {

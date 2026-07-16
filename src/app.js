@@ -19,8 +19,8 @@ import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js"
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.4";
-import { APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildSupportMailto } from "./support.js?v=0.3.4";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.5";
+import { APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildSupportMailto } from "./support.js?v=0.3.5";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
@@ -244,6 +244,7 @@ function render() {
               <span class="nav-icon">${icon}</span><span>${label}</span>
             </button>`).join("")}
         </nav>
+        <a class="sidebar-support-link" href="${escapeHtml(buildSupportMailto())}" aria-label="以電子郵件回報系統錯誤"><span>!</span>錯誤回報</a>
         <div class="sidebar-foot">
           規則版本：rules-0.2<br />
           現行國小鐘點：${formatMoney(state.config.hourlyRate)} 元<br />
@@ -255,6 +256,7 @@ function render() {
           <div><div class="topbar-title">${escapeHtml(state.config.schoolName)}</div><div class="topbar-sub">${state.config.academicYear} 學年度第 ${state.config.term} 學期</div></div>
           <div class="topbar-actions">
             <div class="account-chip save-chip"><span class="account-dot ${cloudUi.connected ? "connected" : ""}"></span>${savedTimeText()}</div>
+            <a class="account-chip topbar-report-button" href="${escapeHtml(buildSupportMailto())}" aria-label="以電子郵件回報系統錯誤"><span class="report-mark">!</span>錯誤回報</a>
             <button class="account-chip account-button" type="button" id="open-access"><span class="google-mark">G</span>${escapeHtml(accountButtonText())}</button>
           </div>
         </header>
