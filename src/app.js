@@ -19,8 +19,8 @@ import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js"
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.5";
-import { APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildSupportMailto } from "./support.js?v=0.3.5";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.6";
+import { APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.3.6";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
@@ -198,11 +198,15 @@ function accountButtonText() {
 }
 
 function renderAppFooter(extraClass = "") {
-  const reportUrl = escapeHtml(buildSupportMailto());
   return `<footer class="app-footer ${escapeHtml(extraClass)}">
     <div class="footer-copyright"><strong>${escapeHtml(COPYRIGHT_NOTICE)}</strong><span>江志宏 · 系統版本 ${escapeHtml(APP_VERSION)}</span></div>
-    <div class="footer-support"><a class="error-report-link" href="${reportUrl}">錯誤回報</a><span>請附發生時間、操作步驟、錯誤訊息與不含個資的截圖。</span><a href="mailto:${escapeHtml(SUPPORT_EMAIL)}">${escapeHtml(SUPPORT_EMAIL)}</a></div>
+    <div class="footer-support"><button class="error-report-link" type="button" data-open-error-report>錯誤回報</button><span>可輸入說明並加入不含個資的截圖。</span><a href="mailto:${escapeHtml(SUPPORT_EMAIL)}">${escapeHtml(SUPPORT_EMAIL)}</a></div>
   </footer>`;
+}
+
+function currentReportPage() {
+  if (cloudAccessRequired && !cloudUi.connected) return "登入頁";
+  return navItems.find(([key]) => key === activePage)?.[2] || (activePage === "settings" ? "系統設定" : activePage);
 }
 
 function showToast(message) {
@@ -244,7 +248,7 @@ function render() {
               <span class="nav-icon">${icon}</span><span>${label}</span>
             </button>`).join("")}
         </nav>
-        <a class="sidebar-support-link" href="${escapeHtml(buildSupportMailto())}" aria-label="以電子郵件回報系統錯誤"><span>!</span>錯誤回報</a>
+        <button class="sidebar-support-link" type="button" data-open-error-report aria-label="回報系統錯誤"><span>!</span>錯誤回報</button>
         <div class="sidebar-foot">
           規則版本：rules-0.2<br />
           現行國小鐘點：${formatMoney(state.config.hourlyRate)} 元<br />
@@ -256,7 +260,7 @@ function render() {
           <div><div class="topbar-title">${escapeHtml(state.config.schoolName)}</div><div class="topbar-sub">${state.config.academicYear} 學年度第 ${state.config.term} 學期</div></div>
           <div class="topbar-actions">
             <div class="account-chip save-chip"><span class="account-dot ${cloudUi.connected ? "connected" : ""}"></span>${savedTimeText()}</div>
-            <a class="account-chip topbar-report-button" href="${escapeHtml(buildSupportMailto())}" aria-label="以電子郵件回報系統錯誤"><span class="report-mark">!</span>錯誤回報</a>
+            <button class="account-chip topbar-report-button" type="button" data-open-error-report aria-label="回報系統錯誤"><span class="report-mark">!</span>錯誤回報</button>
             <button class="account-chip account-button" type="button" id="open-access"><span class="google-mark">G</span>${escapeHtml(accountButtonText())}</button>
           </div>
         </header>
@@ -310,11 +314,14 @@ function renderAccessGate() {
         <div class="admin-boundary login-gate-boundary"><strong>資料仍由使用者保管</strong><span>案件與名冊不會存進中央後臺。</span><small>伺服端只驗證帳號資格；系統資料存放於登入者自己的 Google Drive 隱藏資料空間。</small></div>
         ${renderAppFooter("login-gate-footer")}
       </section>
-    </main>`;
+    </main>
+    ${renderModal()}`;
 
   document.querySelector("#gate-authorize-drive")?.addEventListener("click", () => googleCloud.requestDriveAccess());
   document.querySelector("#gate-sign-out")?.addEventListener("click", () => googleCloud.signOut());
   document.querySelector("#gate-retry-google")?.addEventListener("click", () => googleCloud.initialize());
+  bindCommonEvents();
+  if (modal === "error-report") bindErrorReportModal();
   googleCloud.mountSignInButton(document.querySelector("#google-signin-slot"));
 }
 
@@ -755,6 +762,19 @@ function renderSettings() {
 }
 
 function renderModal() {
+  if (modal === "error-report") {
+    return `<div class="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="error-report-title"><div class="dialog error-report-dialog"><div class="card-header"><div><h2 id="error-report-title">錯誤回報</h2><p>填寫問題說明並選取截圖，再傳送給開發者。</p></div><button class="btn btn-secondary btn-small" data-close-modal>關閉</button></div>
+      <div class="notice warning"><strong>傳送前請先檢查：</strong>說明與截圖不得包含身分證、金融帳號、教師請假原因或其他敏感個資。</div>
+      <form id="error-report-form"><div class="form-grid">
+        <div class="field span-12"><label for="reportDescription">問題說明</label><textarea id="reportDescription" name="description" rows="4" maxlength="1200" placeholder="請說明原本想完成什麼，以及畫面發生什麼問題。" required></textarea></div>
+        <div class="field span-12"><label for="reportSteps">操作步驟</label><textarea id="reportSteps" name="steps" rows="3" maxlength="1200" placeholder="例如：進入代課費核算 → 開啟案件 → 按下重新試算。"></textarea></div>
+        <div class="field span-12"><label for="reportScreenshot">畫面截圖（建議，最大 5 MB）</label><input id="reportScreenshot" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" /><div id="report-file-preview" class="report-file-preview"><span>尚未選取截圖</span></div></div>
+        <div class="field span-12"><label class="check-row privacy-confirm"><input type="checkbox" name="privacyConfirmed" required />我已確認說明與截圖不含敏感個資。</label></div>
+      </div>
+      <div class="report-delivery-note">手機或支援檔案分享的裝置會開啟分享畫面並帶入截圖；其他環境會開啟預填郵件，請再附加所選截圖。</div>
+      <div class="button-row report-submit-row"><button class="btn btn-primary" type="submit">傳送給開發者</button><button class="btn btn-secondary" type="button" id="copy-error-report">複製回報文字</button></div></form>
+    </div></div>`;
+  }
   if (modal === "person") {
     const isStaff = personModalType === "staff";
     return `<div class="dialog-backdrop" role="dialog" aria-modal="true"><div class="dialog"><div class="card-header"><div><h2>單筆新增${isStaff ? "校內教師" : "短代老師"}</h2><p>${isStaff ? "可設定導師、科任、兼行政與是否協助代課。" : "建立後會直接列入可代課名單。"}</p></div><button class="btn btn-secondary btn-small" data-close-modal>關閉</button></div>
@@ -844,6 +864,14 @@ function bindCommonEvents() {
   document.querySelectorAll("[data-go]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.go)));
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", () => { modal = null; render(); }));
   document.querySelector("#open-access")?.addEventListener("click", () => { modal = "access"; render(); });
+  bindErrorReportTriggers();
+}
+
+function bindErrorReportTriggers() {
+  document.querySelectorAll("[data-open-error-report]").forEach((button) => button.addEventListener("click", () => {
+    modal = "error-report";
+    render();
+  }));
 }
 
 function navigate(page) {
@@ -866,9 +894,89 @@ function bindPageEvents() {
   if (modal === "person") bindPersonModal();
   if (modal === "manual-fee") bindManualFeeModal();
   if (modal === "fund-source") bindFundSourceModal();
+  if (modal === "error-report") bindErrorReportModal();
   if (modal === "access") bindAccessModal();
   if (modal === "drive-data-choice") bindDriveChoiceModal();
   if (modal === "monthly-backup-reminder") bindMonthlyBackupReminder();
+}
+
+function errorReportDetails(form) {
+  const data = new FormData(form);
+  return {
+    occurredAt: new Date().toLocaleString("zh-TW", { hour12: false }),
+    environment: `${navigator.userAgent}；畫面 ${window.innerWidth}×${window.innerHeight}`,
+    page: currentReportPage(),
+    description: String(data.get("description") || "").trim(),
+    steps: String(data.get("steps") || "").trim(),
+  };
+}
+
+function bindErrorReportModal() {
+  const form = document.querySelector("#error-report-form");
+  const screenshotInput = document.querySelector("#reportScreenshot");
+  const preview = document.querySelector("#report-file-preview");
+
+  screenshotInput?.addEventListener("change", () => {
+    const file = screenshotInput.files?.[0];
+    if (!file) {
+      preview.innerHTML = "<span>尚未選取截圖</span>";
+      return;
+    }
+    if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) {
+      screenshotInput.value = "";
+      preview.innerHTML = "<span>請選擇 PNG、JPG 或 WebP，檔案不得超過 5 MB。</span>";
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      preview.innerHTML = `<img src="${reader.result}" alt="錯誤回報截圖預覽" /><span>${escapeHtml(file.name)}・${(file.size / 1024 / 1024).toFixed(2)} MB</span>`;
+    }, { once: true });
+    reader.readAsDataURL(file);
+  });
+
+  document.querySelector("#copy-error-report")?.addEventListener("click", async () => {
+    if (!form?.reportValidity()) return;
+    const reportText = buildErrorReportText(errorReportDetails(form));
+    try {
+      await navigator.clipboard.writeText(`${reportText}\n\n開發者：${SUPPORT_EMAIL}`);
+      showToast("錯誤回報文字已複製");
+    } catch {
+      showToast("無法自動複製，請改用傳送給開發者");
+    }
+  });
+
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    const details = errorReportDetails(form);
+    const reportText = buildErrorReportText(details);
+    const screenshot = screenshotInput?.files?.[0];
+    const sharePayload = screenshot ? {
+      title: `課務核算台錯誤回報 v${APP_VERSION}`,
+      text: `請傳送給開發者 ${SUPPORT_EMAIL}\n\n${reportText}`,
+      files: [screenshot],
+    } : null;
+
+    if (sharePayload && typeof navigator.share === "function" && typeof navigator.canShare === "function" && navigator.canShare({ files: sharePayload.files })) {
+      try {
+        await navigator.share(sharePayload);
+        modal = null;
+        render();
+        showToast("已開啟分享畫面，請確認傳送對象");
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+      }
+    }
+
+    const mailLink = document.createElement("a");
+    mailLink.href = buildSupportMailto(details);
+    mailLink.hidden = true;
+    document.body.append(mailLink);
+    mailLink.click();
+    mailLink.remove();
+    showToast(screenshot ? "郵件已開啟，請附加剛才選取的截圖" : "錯誤回報郵件已開啟");
+  });
 }
 
 function bindAccessModal() {

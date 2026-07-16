@@ -1017,6 +1017,52 @@ h3 {
   background: #eef8f6;
 }
 
+.error-report-dialog {
+  width: min(760px, 100%);
+}
+
+.error-report-dialog textarea {
+  resize: vertical;
+}
+
+.report-file-preview {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px dashed #b7ccc8;
+  border-radius: 10px;
+  color: var(--muted);
+  background: #f8fbfa;
+}
+
+.report-file-preview img {
+  width: 88px;
+  height: 64px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.privacy-confirm {
+  padding: 10px 12px;
+  border: 1px solid #e1c99d;
+  border-radius: 10px;
+  background: #fff9ee;
+}
+
+.report-delivery-note {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.report-submit-row {
+  margin-top: 16px;
+}
+
 .cloud-profile {
   display: flex;
   align-items: center;
