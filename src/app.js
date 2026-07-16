@@ -19,8 +19,8 @@ import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js"
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.2";
-import { APP_VERSION, COPYRIGHT_NOTICE, SUPPORT_EMAIL, buildSupportMailto } from "./support.js?v=0.3.2";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.3";
+import { APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildSupportMailto } from "./support.js?v=0.3.3";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
@@ -294,6 +294,10 @@ function renderAccessGate() {
         <div class="login-gate-brand"><span class="brand-mark">鐘</span><div><strong>課務核算台</strong><small>Substitute Fee Desk</small></div></div>
         <div class="login-gate-heading"><span>正式使用入口</span><h1 id="login-gate-title">使用 Google 教育帳號登入</h1><p>完成帳號確認並連接自己的 Google Drive 後，才會開啟系統與讀取資料。</p></div>
         <div class="notice warning account-rule"><strong>登入規定</strong><br />一般使用者請使用縣市或學校核發、網域以 <b>.edu.tw</b> 結尾的 Google Workspace 教育帳號。個人 Gmail 不開放；中央管理帳號除外。</div>
+        <div class="drive-connection-reason">
+          <div class="drive-reason-mark">Drive</div>
+          <div><h2>為什麼要連接 Google Drive？</h2><p>${escapeHtml(DRIVE_CONNECTION_REASON)}</p><ul><li>只使用本系統專用的隱藏資料空間。</li><li>無法查看、搜尋或修改雲端硬碟中的其他檔案。</li><li>資料仍由登入帳號保管，可另行匯出完整備份。</li></ul></div>
+        </div>
         <div class="application-flow login-gate-flow">
           <div><span>1</span><strong>Google 登入</strong><small>伺服端確認帳號資格</small></div>
           <div><span>2</span><strong>連接 Drive</strong><small>只授權隱藏資料空間</small></div>

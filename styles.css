@@ -881,6 +881,48 @@ h3 {
   margin: 18px 0;
 }
 
+.drive-connection-reason {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #b9d4cf;
+  border-radius: 13px;
+  background: #f0f8f6;
+}
+
+.drive-reason-mark {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  border-radius: 15px;
+  color: #fff;
+  background: var(--teal);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.drive-connection-reason h2 {
+  margin: 0 0 7px;
+  color: var(--navy);
+  font-size: 18px;
+}
+
+.drive-connection-reason p {
+  margin: 0;
+  color: #3d5958;
+  line-height: 1.65;
+}
+
+.drive-connection-reason ul {
+  margin: 9px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .login-gate-secondary {
   margin-top: 10px;
 }
@@ -1991,6 +2033,16 @@ td select {
 
   .login-gate-brand {
     margin-bottom: 18px;
+  }
+
+  .drive-connection-reason {
+    grid-template-columns: 1fr;
+  }
+
+  .drive-reason-mark {
+    width: 52px;
+    height: 40px;
+    border-radius: 10px;
   }
 
   .app-footer {
