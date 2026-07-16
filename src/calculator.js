@@ -1,8 +1,10 @@
 import { BURDEN, determineBurden, ruleMeta } from "./rules.js";
+import { calculationInputSignature } from "./case-integrity.js";
 
 export const RULE_VERSION = "rules-0.2+decision-2026.07";
 export const RATE_VERSION = "114.09.01-current";
 export const REASON_VERSION = "AR-0.2";
+export const CURRENT_RATE_EFFECTIVE_FROM = "2025-09-01";
 
 export function roundMoney(value, mode = "round") {
   const amount = Number(value || 0);
@@ -11,12 +13,88 @@ export function roundMoney(value, mode = "round") {
   return Math.round(amount);
 }
 
+function isIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+}
+
+export function selectHourlyRate(date, config = {}) {
+  if (!isIsoDate(date)) return { ok: false, error: "課節日期格式不正確，無法選取鐘點費率。" };
+  const versions = Array.isArray(config.rateVersions) && config.rateVersions.length
+    ? config.rateVersions
+    : [{ id: RATE_VERSION, effectiveFrom: CURRENT_RATE_EFFECTIVE_FROM, amount: Number(config.hourlyRate) }];
+  const candidates = versions.filter((version) => {
+    if (version.enabled === false) return false;
+    if (!version.effectiveFrom || version.effectiveFrom > date) return false;
+    return !version.effectiveTo || version.effectiveTo >= date;
+  });
+  if (candidates.length !== 1) {
+    return {
+      ok: false,
+      error: candidates.length
+        ? `${date} 有 ${candidates.length} 個有效鐘點費率版本，請先修正設定。`
+        : `${date} 找不到有效鐘點費率；本版費率自 ${CURRENT_RATE_EFFECTIVE_FROM} 起適用。`,
+    };
+  }
+  const selected = candidates[0];
+  const amount = Number(selected.amount);
+  if (!Number.isFinite(amount) || !Number.isInteger(amount) || amount < 0) {
+    return { ok: false, error: `${date} 的鐘點費率必須是非負有限整數。` };
+  }
+  return { ok: true, id: selected.id || selected.effectiveFrom, amount };
+}
+
+function feeId(caseId, parts) {
+  return `F-${caseId}-${parts.map((part) => encodeURIComponent(String(part || "_"))).join("-")}`;
+}
+
+export function validateAffectedPeriods(leaveCase) {
+  const errors = [];
+  const validPeriods = [];
+  const periodKeys = new Set();
+  const periodIds = new Set();
+  for (const period of leaveCase.affectedPeriods || []) {
+    if (!isIsoDate(period.date)) {
+      errors.push(`節次 ${period.periodNo || "未填"} 的日期格式不正確。`);
+      continue;
+    }
+    if (leaveCase.startDate && period.date < leaveCase.startDate) {
+      errors.push(`${period.date} 第 ${period.periodNo} 節早於請假開始日期。`);
+      continue;
+    }
+    if (leaveCase.endDate && period.date > leaveCase.endDate) {
+      errors.push(`${period.date} 第 ${period.periodNo} 節晚於請假結束日期。`);
+      continue;
+    }
+    if (!Number.isInteger(Number(period.periodNo)) || Number(period.periodNo) < 1) {
+      errors.push(`${period.date} 的節次必須是正整數。`);
+      continue;
+    }
+    if (!period.id || periodIds.has(period.id)) {
+      errors.push(`${period.date} 第 ${period.periodNo} 節使用重複或空白的課節 ID。`);
+      continue;
+    }
+    const key = `${period.date}|${Number(period.periodNo)}`;
+    if (periodKeys.has(key)) {
+      errors.push(`${period.date} 第 ${period.periodNo} 節重複登錄。`);
+      continue;
+    }
+    periodIds.add(period.id);
+    periodKeys.add(key);
+    validPeriods.push(period);
+  }
+  return { errors, validPeriods };
+}
+
 export function calculateCase(leaveCase, config) {
   const decisions = [];
   const feeMap = new Map();
-  const errors = [];
+  const validation = validateAffectedPeriods(leaveCase);
+  const errors = [...validation.errors];
 
-  for (const period of leaveCase.affectedPeriods || []) {
+  for (const period of validation.validPeriods) {
     const decision = determineBurden(leaveCase, period);
     const meta = ruleMeta(decision.ruleId);
     decisions.push({
@@ -37,11 +115,18 @@ export function calculateCase(leaveCase, config) {
       continue;
     }
 
+    const rate = selectHourlyRate(period.date, config);
+    if (!rate.ok) {
+      errors.push(`${period.date} 第 ${period.periodNo} 節：${rate.error}`);
+      continue;
+    }
+
     const serviceMonth = period.date?.slice(0, 7) || leaveCase.startDate?.slice(0, 7) || "undated";
     const preferredFundSourceId = period.fundSourceId || "";
-    const key = [serviceMonth, period.substituteId, decision.burden, decision.ruleId, preferredFundSourceId].join("|");
+    const keyParts = [serviceMonth, period.substituteId, decision.burden, decision.ruleId, preferredFundSourceId, rate.id, rate.amount];
+    const key = keyParts.join("|");
     const existing = feeMap.get(key) || {
-      id: `F-${leaveCase.id}-${feeMap.size + 1}`,
+      id: feeId(leaveCase.id, keyParts),
       type: "course_hourly",
       payeeId: period.substituteId,
       burden: decision.burden,
@@ -51,12 +136,19 @@ export function calculateCase(leaveCase, config) {
       serviceMonth,
       preferredFundSourceId,
       quantity: 0,
-      unitRate: Number(config.hourlyRate || 0),
+      rateVersion: rate.id,
+      unitRate: rate.amount,
       periodIds: [],
+      overtimePeriodIds: [],
+      stopPaymentNote: "",
       manual: false,
     };
     existing.quantity += 1;
     existing.periodIds.push(period.id);
+    if (period.isOvertime) {
+      existing.overtimePeriodIds.push(period.id);
+      existing.stopPaymentNote = `含 ${existing.overtimePeriodIds.length} 節超時授課；原教師該節超時鐘點費應另行停發（非本筆計價）。`;
+    }
     existing.amount = existing.quantity * existing.unitRate;
     feeMap.set(key, existing);
   }
@@ -96,6 +188,7 @@ export function calculateCase(leaveCase, config) {
     .map((fee) => ({ feeId: fee.id, rows: previousAllocations.get(fee.id) || [] }));
 
   return {
+    inputSignature: calculationInputSignature(leaveCase),
     decisions,
     feeItems,
     allocations,

@@ -17,10 +17,13 @@ import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js"
 import { parseRosterText, rosterTemplate } from "./importer.js";
 import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js";
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
+import { selectMonthlyCases } from "./monthly-selection.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.7";
-import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.3.7";
+import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js";
+import { localIsoDate, localIsoMonth } from "./date-utils.js";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.8";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.3.8";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
@@ -90,12 +93,11 @@ function formatDateTime(value) {
 }
 
 function todayMonth() {
-  return new Date().toISOString().slice(0, 7);
+  return localIsoMonth();
 }
 
 function localDateValue(date = new Date()) {
-  const offset = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+  return localIsoDate(date);
 }
 
 function firstCaseMonth() {
@@ -347,7 +349,7 @@ function renderDashboard() {
   const pending = cases.filter((item) => item.status !== "ready" && item.status !== "closed").length;
   return `
     ${pageHeading("", "本月課務總覽", "快速查看請假案件、代課節次、待處理事項與鐘點費試算結果。", `
-      <div class="button-row"><button class="btn btn-secondary" data-go="settings">學期初設定</button><button class="btn btn-secondary" id="load-demo">載入示範資料</button><button class="btn btn-primary" data-go="case">新增請假案件</button></div>`)}
+      <div class="button-row"><button class="btn btn-secondary" data-go="settings">學期初設定</button><button class="btn btn-secondary" id="load-demo" ${cloudUi.connected ? "disabled" : ""}>載入示範資料</button><button class="btn btn-primary" data-go="case">新增請假案件</button></div>`)}
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-label">請假案件</div><div class="stat-value">${cases.length}</div><div class="stat-note">目前資料檔</div></div>
       <div class="stat-card"><div class="stat-label">受影響節次</div><div class="stat-value">${periodCount}</div><div class="stat-note">含調補課與代課</div></div>
@@ -431,7 +433,7 @@ function renderRoster() {
 }
 
 function newCaseDraft() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateValue();
   return {
     id: newId("DRAFT"),
     teacherId: "",
@@ -473,7 +475,7 @@ function renderCaseEditor() {
     && Number(c.accumulatedHoursBefore) < 56
     && Number(c.accumulatedHoursBefore) + Number(c.leaveHours) > 56;
   return `
-    ${pageHeading("", editingExisting ? `編輯案件 ${escapeHtml(c.id)}` : "新增請假案件", editingExisting ? "從代課費核算開啟；可調整逐節排代、重新試算及覆核費用。" : "依序輸入事實、整理節次、安排代課，再執行規則試算。", `<div class="button-row"><button class="btn btn-secondary" id="save-draft">儲存草稿</button><button class="btn btn-primary" id="calculate-case">執行試算</button></div>`)}
+    ${pageHeading("", editingExisting ? `編輯案件 ${escapeHtml(c.id)}` : "新增請假案件", editingExisting ? "從代課費核算開啟；可調整逐節排代、重新試算及覆核費用。" : "依序輸入事實、整理節次、安排代課，再執行規則試算。", `<div class="button-row"><button class="btn btn-secondary" id="save-draft" type="button">儲存草稿</button><button class="btn btn-primary" id="calculate-case" type="button">執行試算</button></div>`)}
     <form id="case-form" autocomplete="off">
       <div class="card">
         <div class="card-header"><div><h2>1. 請假事實</h2><p>系統不保存身心調適或病假具體原因。</p></div><span class="badge none">事實層</span></div>
@@ -556,7 +558,7 @@ function renderCalculation(c) {
       <div class="table-wrap">
         <table><thead><tr><th>費用項目</th><th>領款人</th><th>數量</th><th>單價</th><th>費用負擔</th><th>金額</th><th>規則／法源</th></tr></thead>
         <tbody>${calc.feeItems.length ? calc.feeItems.map((fee) => `
-          <tr><td><strong>${fee.type === "course_hourly" ? "課務代課鐘點費" : fee.type === "homeroom_allowance" ? "代理導師職務加給" : "代理導師鐘點費"}</strong>${fee.manual ? '<br /><span class="badge manual">人工認定</span>' : ""}</td><td>${escapeHtml(personName(fee.payeeId))}</td><td>${formatMoney(fee.quantity)} ${fee.type === "homeroom_allowance" ? "日" : "節"}</td><td>${formatMoney(fee.unitRate)}</td><td>${burdenBadge(fee.burden)}</td><td class="amount">${formatMoney(fee.amount)} 元</td><td><div>${escapeHtml(fee.ruleTitle)}</div><div class="rule-source">${escapeHtml(fee.source)}</div></td></tr>
+          <tr><td><strong>${fee.type === "course_hourly" ? "課務代課鐘點費" : fee.type === "homeroom_allowance" ? "代理導師職務加給" : "代理導師鐘點費"}</strong>${fee.manual ? '<br /><span class="badge manual">人工認定</span>' : ""}</td><td>${escapeHtml(personName(fee.payeeId))}</td><td>${formatMoney(fee.quantity)} ${fee.type === "homeroom_allowance" ? "日" : "節"}</td><td>${formatMoney(fee.unitRate)}</td><td>${burdenBadge(fee.burden)}</td><td class="amount">${formatMoney(fee.amount)} 元</td><td><div>${escapeHtml(fee.ruleTitle)}</div><div class="rule-source">${escapeHtml(fee.source)}</div>${fee.stopPaymentNote ? `<div class="notice warning">${escapeHtml(fee.stopPaymentNote)}</div>` : ""}</td></tr>
           ${fee.burden === BURDEN.PUBLIC ? `<tr><td colspan="7">${renderAllocationBox(c, fee)}</td></tr>` : ""}`
         ).join("") : `<tr><td colspan="7" class="empty">目前沒有會發生金額的費用項目。</td></tr>`}</tbody></table>
       </div>
@@ -582,7 +584,7 @@ function renderCases() {
   return `
     ${pageHeading("", "代課費核算", "查看每筆請假案件的排代、試算與費用分攤結果。", `<button class="btn btn-primary" data-go="case">新增請假案件</button>`)}
     <div class="card">
-      <div class="card-header"><div><h2>全部案件</h2><p>已月結案件若修改，後續會建立更正版本。</p></div><span class="badge none">${state.cases.length} 案</span></div>
+      <div class="card-header"><div><h2>全部案件</h2><p>已月結案件不可直接修改；更正版本功能尚未啟用。</p></div><span class="badge none">${state.cases.length} 案</span></div>
       ${renderCaseRows([...state.cases].reverse(), true)}
     </div>`;
 }
@@ -660,10 +662,9 @@ function renderCaseRows(cases, showDelete = false) {
 }
 
 function collectMonth(month) {
-  const relevantCases = state.cases.filter((item) => (item.affectedPeriods || []).some((period) => period.date?.startsWith(month)) || item.homeroomStartDate?.startsWith(month));
-  const feeItems = relevantCases.flatMap((item) => (item.calculation?.feeItems || []).filter((fee) => fee.serviceMonth === month));
+  const { relevantCases, finalizedCases, pending } = selectMonthlyCases(state.cases, month);
+  const feeItems = finalizedCases.flatMap((item) => (item.calculation?.feeItems || []).filter((fee) => fee.serviceMonth === month));
   const totals = caseTotals(feeItems);
-  const pending = relevantCases.filter((item) => item.status !== "ready" && item.status !== "closed");
   const fundTotals = new Map();
   const monthlyFeeIds = new Set(feeItems.map((fee) => fee.id));
   for (const item of relevantCases) {
@@ -674,13 +675,14 @@ function collectMonth(month) {
       }
     }
   }
-  return { relevantCases, feeItems, totals, pending, fundTotals };
+  return { relevantCases, finalizedCases, feeItems, totals, pending, fundTotals };
 }
 
 function renderMonthly() {
   const month = sessionStorage.getItem("selected-month") || firstCaseMonth();
   const data = collectMonth(month);
-  const exportRows = buildMonthlyExportRows(data.relevantCases, month, state.people, state.fundSources);
+  const exportRows = buildMonthlyExportRows(data.finalizedCases, month, state.people, state.fundSources);
+  const canExport = exportRows.length > 0 && data.pending.length === 0;
   return `
     ${pageHeading("", "月結與報表", "依實際代課發生日歸屬月份，可列印月結報表或下載本月費用明細。", `<div class="field" style="min-width:180px"><label for="month-picker">核算月份</label><input id="month-picker" type="month" value="${month}" /></div>`)}
     ${data.pending.length ? `<div class="notice danger">本月仍有 ${data.pending.length} 案尚未完成覆核：${data.pending.map((item) => escapeHtml(item.id)).join("、")}</div>` : '<div class="notice">本月案件均已完成覆核，可列印或匯出費用明細。</div>'}
@@ -697,7 +699,7 @@ function renderMonthly() {
           <h2>代課費用明細</h2>
           <div class="print-meta"><span>${escapeHtml(state.config.academicYear)} 學年度第 ${escapeHtml(state.config.term)} 學期</span><span>核算月份：${escapeHtml(month)}</span></div>
         </div>
-        <div class="card-header"><div><h2>費用明細</h2><p>列印供送核的月結報表，或下載可用試算表開啟的 CSV 明細。</p></div><div class="button-row screen-only"><button class="btn btn-secondary" id="print-monthly" ${exportRows.length ? "" : "disabled"}>列印月結報表</button><button class="btn btn-primary" id="export-monthly" ${exportRows.length ? "" : "disabled"}>下載明細 CSV</button></div></div>
+        <div class="card-header"><div><h2>費用明細</h2><p>列印供送核的月結報表，或下載可用試算表開啟的 CSV 明細。</p></div><div class="button-row screen-only"><button class="btn btn-secondary" id="print-monthly" ${canExport ? "" : "disabled"}>列印月結報表</button><button class="btn btn-primary" id="export-monthly" ${canExport ? "" : "disabled"}>下載明細 CSV</button></div></div>
         <div class="backup-inline-hint screen-only"><div class="backup-hint-icon">備</div><div><strong>月結完成後，建議保留一份「完整備份」</strong><span>列印時系統會提醒下載。完整備份可匯入復原資料；CSV 只能查看明細，不能還原系統。</span></div></div>
         <div class="table-wrap"><table class="monthly-print-table"><thead><tr><th>日期</th><th>班級</th><th>費用項目</th><th>領款人</th><th>數量／單價</th><th>負擔</th><th>金額</th></tr></thead><tbody>${exportRows.map((row) => `<tr><td>${escapeHtml(row.dates || "—")}</td><td>${escapeHtml(row.classes || "—")}</td><td>${escapeHtml(row.feeType)}${row.manual ? ' <span class="badge manual">人工</span>' : ""}<small>${escapeHtml(row.caseId)}</small></td><td>${escapeHtml(row.payeeName)}</td><td>${formatMoney(row.quantity)} ${escapeHtml(row.unit)} × ${formatMoney(row.unitRate)}</td><td>${burdenBadge(row.burdenCode)}</td><td class="amount">${formatMoney(row.amount)} 元</td></tr>`).join("") || '<tr><td colspan="7" class="empty">本月尚無已試算費用。</td></tr>'}</tbody></table></div>
         <div class="monthly-print-summary">公費 ${formatMoney(data.totals.public)} 元　／　自費 ${formatMoney(data.totals.self)} 元　／　合計 ${formatMoney(data.totals.public + data.totals.self)} 元</div>
@@ -738,7 +740,7 @@ function renderSettings() {
         <div class="button-row backup-actions"><button class="btn btn-primary" type="button" id="export-backup">匯出完整備份</button><label class="btn btn-secondary file-button">匯入完整備份<input type="file" accept=".json,application/json" id="import-backup" /></label></div>
         <div class="help"><strong>完整備份可復原系統：</strong>若資料遺失、換電腦或需要交接，可在這裡匯入。匯入前會先顯示學校、匯出時間與案件數，確認後才會取代目前資料。</div>
         <hr class="section-rule" />
-        <div class="button-row"><button class="btn btn-secondary" id="load-demo-settings">改用示範資料</button><button class="btn btn-danger" id="clear-data">清空本機資料</button></div>
+        <div class="button-row"><button class="btn btn-secondary" id="load-demo-settings" ${cloudUi.connected ? "disabled" : ""}>改用示範資料</button><button class="btn btn-danger" id="clear-data">清空本機資料</button></div>
       </div>
     </div>
     <div class="card access-policy-card">
@@ -1021,7 +1023,8 @@ function bindDashboardEvents() {
 }
 
 function loadDemo() {
-  if (state.cases.length && !confirm("載入示範資料會取代目前本機資料，是否繼續？")) return;
+  if (cloudUi.connected) return showToast("已連接 Google Drive 時不能載入示範資料，避免覆寫正式主檔");
+  if (!confirm("載入示範資料會取代目前瀏覽器內的名冊、設定與案件。建議先匯出完整備份。\n\n確定繼續？")) return;
   state = demoState();
   saveState("load-demo", "system");
   draftCase = null;
@@ -1128,6 +1131,7 @@ function bindPersonModal() {
 function syncDraftFromForm() {
   const form = document.querySelector("#case-form");
   if (!form || !draftCase) return;
+  const previousSignature = calculationInputSignature(draftCase);
   const data = new FormData(form);
   const fields = ["teacherId", "leaveType", "officialReason", "startDate", "endDate", "startTime", "endTime", "startPart", "endPart", "homeroomProxyId", "homeroomStartDate", "homeroomEndDate", "homeroomStartPart", "homeroomEndPart"];
   fields.forEach((field) => { draftCase[field] = data.get(field) || ""; });
@@ -1157,6 +1161,7 @@ function syncDraftFromForm() {
     };
   });
   syncAllocationsFromDom();
+  invalidateIfCalculationInputChanged(draftCase, previousSignature);
 }
 
 function syncAllocationsFromDom() {
@@ -1181,13 +1186,13 @@ function bindCaseEvents() {
   document.querySelector("#add-period")?.addEventListener("click", () => {
     syncDraftFromForm();
     draftCase.affectedPeriods.push({ id: newId("AP"), date: draftCase.startDate, periodNo: draftCase.affectedPeriods.length + 1, className: personById(draftCase.teacherId)?.className || "", subject: "", handling: "internal_sub", substituteId: "", fundSourceId: "", thresholdZone: "", isOvertime: false });
-    draftCase.calculation = null;
+    invalidateCaseCalculation(draftCase);
     render();
   });
   document.querySelectorAll("[data-delete-period]").forEach((button) => button.addEventListener("click", () => {
     syncDraftFromForm();
     draftCase.affectedPeriods = draftCase.affectedPeriods.filter((period) => period.id !== button.dataset.deletePeriod);
-    draftCase.calculation = null;
+    invalidateCaseCalculation(draftCase);
     render();
   }));
   document.querySelector("#save-draft")?.addEventListener("click", () => saveDraft(false));
@@ -1250,8 +1255,9 @@ function saveDraft(navigateAfter = true) {
   if (errors.length) return showToast(errors[0]);
   ensureDraftCaseNumber();
   persistDraftInState();
+  if (navigateAfter) { activePage = "cases"; draftCase = null; }
+  render();
   showToast("案件草稿已儲存");
-  if (navigateAfter) { activePage = "cases"; draftCase = null; render(); }
 }
 
 function calculateDraft() {
@@ -1330,7 +1336,10 @@ function bindCasesEvents() {
 }
 
 function openCase(id) {
-  draftCase = structuredClone(state.cases.find((item) => item.id === id));
+  const target = state.cases.find((item) => item.id === id);
+  if (!target) return showToast("找不到案件");
+  if (target.status === "closed") return showToast("已月結案件不可直接修改；更正版本功能尚未啟用");
+  draftCase = structuredClone(target);
   activePage = "case";
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1367,6 +1376,9 @@ function bindMonthlyEvents() {
 }
 
 function printMonthly() {
+  const month = document.querySelector("#month-picker")?.value || firstCaseMonth();
+  const data = collectMonth(month);
+  if (data.pending.length) return showToast("本月仍有待處理案件，完成覆核後才能列印月結報表");
   modal = "monthly-backup-reminder";
   render();
 }
@@ -1385,7 +1397,8 @@ function bindMonthlyBackupReminder() {
 function exportMonthlyCsv() {
   const month = document.querySelector("#month-picker")?.value || firstCaseMonth();
   const data = collectMonth(month);
-  const rows = buildMonthlyExportRows(data.relevantCases, month, state.people, state.fundSources);
+  if (data.pending.length) return showToast("本月仍有待處理案件，完成覆核後才能下載明細");
+  const rows = buildMonthlyExportRows(data.finalizedCases, month, state.people, state.fundSources);
   if (!rows.length) return showToast("本月尚無可匯出的費用明細");
 
   const blob = new Blob([monthlyRowsToCsv(rows)], { type: "text/csv;charset=utf-8" });
@@ -1419,6 +1432,7 @@ function exportFullBackup() {
 async function importFullBackup(input) {
   const file = input.files?.[0];
   if (!file) return;
+  let committed = false;
   try {
     const result = parseBackup(await file.text());
     if (!result.ok) return showToast(result.error);
@@ -1435,16 +1449,26 @@ async function importFullBackup(input) {
       "匯入後將取代目前資料，是否繼續？",
     ].join("\n");
     if (!confirm(message)) return;
-    localStorageAdapter.save(payload.state);
-    state = localStorageAdapter.load();
-    saveState("import-backup", "system");
+    const importedState = structuredClone(payload.state);
+    importedState.meta.lastSavedAt = new Date().toISOString();
+    importedState.auditEvents.push({
+      id: newId("AUD"),
+      action: "import-backup",
+      entityId: "system",
+      at: new Date().toISOString(),
+      actor: "local-browser",
+    });
+    localStorageAdapter.save(importedState);
+    state = importedState;
+    committed = true;
+    googleCloud.queueSave(state);
     draftCase = null;
     activePage = "dashboard";
     render();
     showToast("完整備份已匯入並自動儲存");
   } catch (error) {
     console.error("備份匯入失敗", error);
-    showToast("備份匯入失敗，原有資料未變更");
+    showToast(committed ? "備份已匯入本機，但後續同步失敗" : "備份匯入失敗，原有資料未變更");
   } finally {
     input.value = "";
   }
@@ -1454,6 +1478,7 @@ function bindSettingsEvents() {
   document.querySelector("#settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    const previousCalculationSettings = `${state.config.hourlyRate}|${state.config.homeroomMonthly}|${state.config.roundingMode}`;
     state.config = {
       ...state.config,
       schoolName: data.get("schoolName").trim(),
@@ -1463,9 +1488,13 @@ function bindSettingsEvents() {
       homeroomMonthly: Number(data.get("homeroomMonthly") || 0),
       roundingMode: data.get("roundingMode"),
     };
+    const nextCalculationSettings = `${state.config.hourlyRate}|${state.config.homeroomMonthly}|${state.config.roundingMode}`;
+    const invalidatedCount = previousCalculationSettings === nextCalculationSettings
+      ? 0
+      : state.cases.reduce((count, leaveCase) => count + (invalidateCaseCalculation(leaveCase) ? 1 : 0), 0);
     saveState("update-settings", "config");
     render();
-    showToast("設定已儲存；既有案件請重新試算");
+    showToast(invalidatedCount ? `設定已儲存；${invalidatedCount} 件既有試算已失效，請重新試算` : "設定已儲存");
   });
   document.querySelector("#load-demo-settings")?.addEventListener("click", loadDemo);
   document.querySelector("#export-backup")?.addEventListener("click", exportFullBackup);

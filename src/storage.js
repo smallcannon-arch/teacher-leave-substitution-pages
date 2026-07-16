@@ -33,7 +33,7 @@ function migrateLegacyDemoCaseId(state) {
   return state;
 }
 
-function normalizeState(state) {
+export function normalizeState(state) {
   state.meta = {
     storageMode: "local",
     lastSavedAt: "",
@@ -42,6 +42,10 @@ function normalizeState(state) {
     ...(state.meta || {}),
   };
   state.subjects = [...new Set((state.subjects || DEFAULT_SUBJECTS).map((subject) => String(subject || "").trim()).filter(Boolean))];
+  state.people = Array.isArray(state.people) ? state.people : [];
+  state.cases = Array.isArray(state.cases) ? state.cases : [];
+  state.monthlyCloses = Array.isArray(state.monthlyCloses) ? state.monthlyCloses : [];
+  state.auditEvents = Array.isArray(state.auditEvents) ? state.auditEvents : [];
   state.fundSources = (state.fundSources || []).map((source) => ({
     ...source,
     burdenType: source.burdenType || (source.id === "FS-SELF" ? "self" : "public"),
@@ -55,6 +59,17 @@ function normalizeState(state) {
     if (leaveCase.calculation?.versions?.rules) leaveCase.calculation.versions.rules = "rules-0.2+decision-2026.07";
   }
   return state;
+}
+
+export function prepareState(rawState = {}) {
+  const defaults = emptyState();
+  const raw = rawState && typeof rawState === "object" ? structuredClone(rawState) : {};
+  return normalizeState(migrateLegacyDemoCaseId({
+    ...defaults,
+    ...raw,
+    config: { ...defaults.config, ...(raw.config || {}) },
+    meta: { ...defaults.meta, ...(raw.meta || {}) },
+  }));
 }
 
 export function emptyState() {
@@ -88,7 +103,7 @@ export const localStorageAdapter = {
   load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? normalizeState(migrateLegacyDemoCaseId({ ...emptyState(), ...JSON.parse(raw) })) : emptyState();
+      return raw ? prepareState(JSON.parse(raw)) : emptyState();
     } catch (error) {
       console.error("資料載入失敗", error);
       return emptyState();

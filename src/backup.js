@@ -1,3 +1,5 @@
+import { prepareState } from "./storage.js";
+
 export const BACKUP_FORMAT = "substitute-fee-desk-backup";
 export const BACKUP_VERSION = 1;
 
@@ -46,8 +48,21 @@ export function parseBackup(text) {
   if (payload?.format !== BACKUP_FORMAT) return { ok: false, error: "這不是本系統匯出的完整備份。" };
   if (payload?.version !== BACKUP_VERSION) return { ok: false, error: "備份版本不相容，請使用相同或較新的系統匯入。" };
   if (!payload.state || typeof payload.state !== "object") return { ok: false, error: "備份中找不到系統資料。" };
-  if (!payload.state.config || !Array.isArray(payload.state.people) || !Array.isArray(payload.state.cases)) {
+  if (!payload.state.config || typeof payload.state.config !== "object" || Array.isArray(payload.state.config)) {
     return { ok: false, error: "備份內容不完整，未進行匯入。" };
+  }
+
+  const arrayFields = ["people", "cases", "subjects", "fundSources", "monthlyCloses", "auditEvents"];
+  const invalidArrayField = arrayFields.find((field) => field in payload.state && !Array.isArray(payload.state[field]));
+  if (invalidArrayField) return { ok: false, error: `備份欄位 ${invalidArrayField} 格式不正確，未進行匯入。` };
+  if (payload.state.meta !== undefined && (!payload.state.meta || typeof payload.state.meta !== "object" || Array.isArray(payload.state.meta))) {
+    return { ok: false, error: "備份中的儲存資訊格式不正確，未進行匯入。" };
+  }
+
+  try {
+    payload = { ...payload, state: prepareState(payload.state) };
+  } catch {
+    return { ok: false, error: "備份內容無法正規化，未進行匯入。" };
   }
 
   return { ok: true, payload };

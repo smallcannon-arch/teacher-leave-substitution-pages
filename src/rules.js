@@ -5,6 +5,8 @@ export const BURDEN = Object.freeze({
   PENDING: "pending",
 });
 
+export const WELLBEING_EFFECTIVE_FROM = "2025-10-10";
+
 export const LEAVE_TYPES = [
   { value: "personal", label: "事假" },
   { value: "family_care", label: "家庭照顧假" },
@@ -124,7 +126,16 @@ export function determineBurden(leaveCase, affectedPeriod = {}) {
     return { burden: BURDEN.PENDING, ruleId: "R02", note: "本次假單跨越 56 小時門檻，請逐節標示門檻內或超過門檻。" };
   }
 
-  if (type === "wellbeing") return { burden: BURDEN.PUBLIC, ruleId: "R04", note: "身心調適假併入事假額度，但課務費用判為公費。" };
+  if (type === "wellbeing") {
+    if (!affectedPeriod.date || affectedPeriod.date < WELLBEING_EFFECTIVE_FROM) {
+      return {
+        burden: BURDEN.PENDING,
+        ruleId: "R04",
+        note: `身心調適假規則自 ${WELLBEING_EFFECTIVE_FROM} 起適用；較早日期須依當時規定人工確認。`,
+      };
+    }
+    return { burden: BURDEN.PUBLIC, ruleId: "R04", note: "身心調適假併入事假額度，但課務費用判為公費。" };
+  }
   if (type === "sick") {
     return Number(leaveCase.consecutiveSickDays || 0) >= 3
       ? { burden: BURDEN.PUBLIC, ruleId: "R06", note: "連續病假達三日以上。" }

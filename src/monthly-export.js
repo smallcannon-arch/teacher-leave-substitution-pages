@@ -17,6 +17,7 @@ export const MONTHLY_EXPORT_HEADERS = [
   "金額",
   "經費來源與分攤",
   "規則依據",
+  "原教師超時鐘點費停發註記",
 ];
 
 export function feeTypeLabel(fee) {
@@ -36,12 +37,17 @@ export function buildMonthlyExportRows(cases = [], month, people = [], fundSourc
 
   return cases.flatMap((leaveCase) => {
     const periods = (leaveCase.affectedPeriods || []).filter((period) => period.date?.startsWith(month));
-    const dates = uniqueJoined(periods.map((period) => period.date));
-    const classes = uniqueJoined(periods.map((period) => period.className));
-    const subjects = uniqueJoined(periods.map((period) => period.subject));
     return (leaveCase.calculation?.feeItems || [])
       .filter((fee) => fee.serviceMonth === month)
       .map((fee) => {
+        const hasPeriodIds = Array.isArray(fee.periodIds) && fee.periodIds.length > 0;
+        const feePeriodIds = new Set(fee.periodIds || []);
+        const feePeriods = fee.type === "course_hourly"
+          ? (hasPeriodIds ? periods.filter((period) => feePeriodIds.has(period.id)) : periods)
+          : [];
+        const dates = uniqueJoined(feePeriods.map((period) => period.date));
+        const classes = uniqueJoined(feePeriods.map((period) => period.className));
+        const subjects = uniqueJoined(feePeriods.map((period) => period.subject));
         const allocations = leaveCase.allocations?.find((item) => item.feeId === fee.id)?.rows || [];
         const allocationText = allocations.map((row) => {
           const sourceName = sourceMap.get(row.sourceId) || row.sourceId || "未指定";
@@ -53,7 +59,9 @@ export function buildMonthlyExportRows(cases = [], month, people = [], fundSourc
           caseId: leaveCase.id,
           teacherName: personName(leaveCase.teacherId),
           leaveType: leaveLabel(leaveCase.leaveType),
-          dates: fee.type === "homeroom_allowance" ? (leaveCase.homeroomStartDate || dates) : dates,
+          dates: fee.type === "homeroom_allowance"
+            ? uniqueJoined([leaveCase.homeroomStartDate, leaveCase.homeroomEndDate])
+            : dates,
           classes: classes || peopleMap.get(leaveCase.teacherId)?.className || "",
           subjects,
           feeType: feeTypeLabel(fee),
@@ -66,6 +74,7 @@ export function buildMonthlyExportRows(cases = [], month, people = [], fundSourc
           amount: Number(fee.amount || 0),
           allocationText,
           ruleSource: [fee.ruleTitle, fee.source].filter(Boolean).join("｜"),
+          stopPaymentNote: fee.stopPaymentNote || "",
           manual: Boolean(fee.manual),
         };
       });
@@ -74,7 +83,8 @@ export function buildMonthlyExportRows(cases = [], month, people = [], fundSourc
 
 function csvCell(value) {
   const text = String(value ?? "");
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
 export function monthlyRowsToCsv(rows = []) {
@@ -95,6 +105,7 @@ export function monthlyRowsToCsv(rows = []) {
     row.amount,
     row.allocationText,
     row.ruleSource,
+    row.stopPaymentNote,
   ]);
   return `\uFEFF${[MONTHLY_EXPORT_HEADERS, ...data].map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
 }
