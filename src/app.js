@@ -19,7 +19,7 @@ import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js"
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.1";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
