@@ -1,5 +1,5 @@
-import { BURDEN, determineBurden, ruleMeta } from "./rules.js";
-import { calculationInputSignature } from "./case-integrity.js";
+import { BURDEN, determineBurden, ruleMeta } from "./rules.js?v=0.4.0";
+import { calculationInputSignature } from "./case-integrity.js?v=0.4.0";
 
 export const RULE_VERSION = "rules-0.2+decision-2026.07";
 export const RATE_VERSION = "114.09.01-current";
@@ -93,6 +93,7 @@ export function calculateCase(leaveCase, config) {
   const feeMap = new Map();
   const validation = validateAffectedPeriods(leaveCase);
   const errors = [...validation.errors];
+  const warnings = [];
 
   for (const period of validation.validPeriods) {
     const decision = determineBurden(leaveCase, period);
@@ -112,6 +113,10 @@ export function calculateCase(leaveCase, config) {
     if (decision.burden === BURDEN.NONE) continue;
     if (!period.substituteId) {
       errors.push(`${period.date} 第 ${period.periodNo} 節尚未指定代課者。`);
+      continue;
+    }
+    if (period.substituteId === leaveCase.teacherId) {
+      errors.push(`${period.date} 第 ${period.periodNo} 節的代課者不可為請假教師本人。`);
       continue;
     }
 
@@ -155,7 +160,8 @@ export function calculateCase(leaveCase, config) {
 
   const feeItems = [...feeMap.values()];
   const homeroom = calculateHomeroomAllowance(leaveCase, config);
-  if (homeroom.warning) errors.push(homeroom.warning);
+  if (homeroom.error) errors.push(homeroom.error);
+  if (homeroom.warning) warnings.push(homeroom.warning);
   if (homeroom.amount > 0 && leaveCase.homeroomProxyId) {
     feeItems.push({
       id: `F-${leaveCase.id}-H`,
@@ -193,6 +199,7 @@ export function calculateCase(leaveCase, config) {
     feeItems,
     allocations,
     errors,
+    warnings,
     versions: { rules: RULE_VERSION, rates: RATE_VERSION, reasons: REASON_VERSION },
   };
 }
@@ -214,18 +221,29 @@ export function calculateValidHomeroomDays(startDate, startPart, endDate, endPar
 
 export function calculateHomeroomAllowance(leaveCase, config) {
   if (!leaveCase.hasHomeroomDuty || !leaveCase.homeroomProxyId) return { amount: 0, validDays: 0 };
+  if (leaveCase.homeroomProxyId === leaveCase.teacherId) {
+    return { amount: 0, validDays: 0, error: "導師職務代理人不可為請假教師本人。" };
+  }
   const start = leaveCase.homeroomStartDate || leaveCase.startDate;
   const end = leaveCase.homeroomEndDate || leaveCase.endDate;
-  if (!start || !end) return { amount: 0, validDays: 0, warning: "代理導師職務加給缺少起訖日期。" };
+  if (!start || !end) return { amount: 0, validDays: 0, error: "代理導師職務加給缺少起訖日期。" };
   if (start.slice(0, 7) !== end.slice(0, 7)) {
-    return { amount: 0, validDays: 0, warning: "代理導師期間跨月，第一版請拆成兩個案件或手動新增費用，避免月日數分母誤用。" };
+    return { amount: 0, validDays: 0, error: "代理導師期間跨月，請拆成兩個案件或手動新增費用，避免月日數分母誤用。" };
+  }
+  const startPart = leaveCase.homeroomStartPart || "am";
+  const endPart = leaveCase.homeroomEndPart || "pm";
+  if (start === end && startPart === "pm" && endPart === "am") {
+    return { amount: 0, validDays: 0, error: "代理導師同日結束時段不得早於開始時段。" };
   }
   const validDays = calculateValidHomeroomDays(
     start,
-    leaveCase.homeroomStartPart || "am",
+    startPart,
     end,
-    leaveCase.homeroomEndPart || "pm",
+    endPart,
   );
+  const includesUnpaidHalfDay = start === end
+    ? !(startPart === "am" && endPart === "pm")
+    : startPart === endPart;
   const [year, month] = start.split("-").map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
   const dailyRateRaw = Number(config.homeroomMonthly || 0) / daysInMonth;
@@ -234,6 +252,9 @@ export function calculateHomeroomAllowance(leaveCase, config) {
     daysInMonth,
     dailyRate: roundMoney(dailyRateRaw, config.roundingMode),
     amount: roundMoney(dailyRateRaw * validDays, config.roundingMode),
+    warning: includesUnpaidHalfDay
+      ? "代理導師期間含未滿一日的半日時段；依目前規則該半日不計職務加給。"
+      : "",
   };
 }
 

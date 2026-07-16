@@ -1,4 +1,4 @@
-import { prepareState } from "./storage.js";
+import { prepareState } from "./storage.js?v=0.4.0";
 
 export const BACKUP_FORMAT = "substitute-fee-desk-backup";
 export const BACKUP_VERSION = 1;

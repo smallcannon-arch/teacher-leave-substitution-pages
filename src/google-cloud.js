@@ -1,4 +1,4 @@
-import { createBackup, parseBackup } from "./backup.js";
+import { createBackup, parseBackup } from "./backup.js?v=0.4.0";
 
 const DRIVE_FILE_NAME = "substitute-fee-desk-data-v1.json";
 const DEFAULT_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
@@ -54,7 +54,7 @@ function loadGoogleScript() {
 }
 
 export class GoogleCloudService {
-  constructor({ apiBaseUrl, getState, applyRemoteState, chooseDriveData, onChange, onSync, autoConnectDrive = false }) {
+  constructor({ apiBaseUrl, getState, applyRemoteState, chooseDriveData, onChange, onSync, autoConnectDrive = false, authHeartbeatMs = 5 * 60 * 1000 } = {}) {
     this.apiBaseUrl = String(apiBaseUrl || "").replace(/\/$/, "");
     this.getState = getState;
     this.applyRemoteState = applyRemoteState;
@@ -62,6 +62,7 @@ export class GoogleCloudService {
     this.onChange = onChange;
     this.onSync = onSync;
     this.autoConnectDrive = autoConnectDrive;
+    this.authHeartbeatMs = authHeartbeatMs;
     this.phase = "initializing";
     this.message = "正在準備 Google 登入…";
     this.profile = null;
@@ -75,6 +76,9 @@ export class GoogleCloudService {
     this.saveTimer = null;
     this.saveInFlight = null;
     this.pendingState = null;
+    this.saveRetryTimer = null;
+    this.saveRetryCount = 0;
+    this.authHeartbeatTimer = null;
   }
 
   snapshot() {
@@ -83,7 +87,7 @@ export class GoogleCloudService {
       message: this.message,
       configured: Boolean(this.clientId),
       profile: this.profile ? { ...this.profile } : null,
-      connected: this.phase === "connected" || this.phase === "saving",
+      connected: ["connected", "saving", "error"].includes(this.phase) && Boolean(this.driveFileId),
     };
   }
 
@@ -140,13 +144,63 @@ export class GoogleCloudService {
     });
   }
 
-  async apiRequest(path) {
+  async apiRequest(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    headers.set("Authorization", `Bearer ${this.idToken}`);
+    headers.set("Accept", "application/json");
+    let body = options.body;
+    if (body && typeof body !== "string") {
+      headers.set("Content-Type", "application/json");
+      body = JSON.stringify(body);
+    }
     const response = await fetch(`${this.apiBaseUrl}${path}`, {
-      headers: { Authorization: `Bearer ${this.idToken}`, Accept: "application/json" },
+      ...options,
+      headers,
+      body,
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || `登入服務回應 ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(payload.detail || `登入服務回應 ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
     return payload;
+  }
+
+  listLoginAccounts() {
+    return this.apiRequest("/admin/accounts");
+  }
+
+  updateLoginAccount(subject, enabled) {
+    return this.apiRequest(`/admin/accounts/${encodeURIComponent(subject)}`, {
+      method: "PATCH",
+      body: { enabled: Boolean(enabled) },
+    });
+  }
+
+  startAuthorizationHeartbeat() {
+    this.stopAuthorizationHeartbeat();
+    if (!this.idToken || !this.authHeartbeatMs) return;
+    this.authHeartbeatTimer = setTimeout(async () => {
+      this.authHeartbeatTimer = null;
+      try {
+        this.profile = await this.apiRequest("/auth/me");
+        this.startAuthorizationHeartbeat();
+      } catch (error) {
+        if ([401, 403].includes(error.status)) {
+          this.signOut();
+          this.update("denied", error.message || "此帳號目前無法使用系統");
+          return;
+        }
+        this.startAuthorizationHeartbeat();
+      }
+    }, this.authHeartbeatMs);
+    this.authHeartbeatTimer?.unref?.();
+  }
+
+  stopAuthorizationHeartbeat() {
+    clearTimeout(this.authHeartbeatTimer);
+    this.authHeartbeatTimer = null;
   }
 
   async handleCredential(response) {
@@ -155,6 +209,7 @@ export class GoogleCloudService {
       if (!this.idToken) throw new Error("Google 未回傳登入憑證");
       this.update("verifying", "正在由伺服端確認帳號資格…");
       this.profile = await this.apiRequest("/auth/me");
+      this.startAuthorizationHeartbeat();
       if (this.autoConnectDrive && this.tokenClient) {
         this.update("authorizing-drive", "帳號已確認，正在接續 Google Drive 資料儲存授權…");
         try {
@@ -167,6 +222,7 @@ export class GoogleCloudService {
       }
       this.update("signed-in", "帳號已確認，請繼續授權資料儲存");
     } catch (error) {
+      this.stopAuthorizationHeartbeat();
       this.idToken = "";
       this.profile = null;
       this.update("denied", error.message || "此帳號無法使用系統");
@@ -318,9 +374,13 @@ export class GoogleCloudService {
   }
 
   queueSave(state) {
-    if (!this.driveFileId || !this.accessToken || !["connected", "saving"].includes(this.phase)) return;
+    if (!this.driveFileId || !this.accessToken || !["connected", "saving", "error"].includes(this.phase)) return;
     this.pendingState = structuredClone(state);
     clearTimeout(this.saveTimer);
+    clearTimeout(this.saveRetryTimer);
+    this.saveRetryTimer = null;
+    this.saveRetryCount = 0;
+    if (this.phase === "error") this.update("connected", "偵測到新修改，將重新同步 Google Drive");
     this.saveTimer = setTimeout(() => this.flushSave(), 850);
   }
 
@@ -332,10 +392,24 @@ export class GoogleCloudService {
     this.saveInFlight = this.updateDriveFile(nextState);
     try {
       const syncedAt = await this.saveInFlight;
+      clearTimeout(this.saveRetryTimer);
+      this.saveRetryTimer = null;
+      this.saveRetryCount = 0;
       this.onSync?.({ ownerSub: this.profile.subject, syncedAt, fileId: this.driveFileId });
       this.update("connected", "Google Drive 已同步");
     } catch (error) {
-      this.update("error", `${error.message}；本次修改仍保存在本機`);
+      if (!this.pendingState) this.pendingState = nextState;
+      this.saveRetryCount += 1;
+      const willRetry = this.saveRetryCount <= 3;
+      const retryDelay = Math.min(1500 * (2 ** (this.saveRetryCount - 1)), 6000);
+      this.update("error", `${error.message}；修改仍保存在本機${willRetry ? "，系統將自動重試" : "，請稍後再修改一次以重新同步"}`);
+      if (willRetry) {
+        clearTimeout(this.saveRetryTimer);
+        this.saveRetryTimer = setTimeout(() => {
+          this.saveRetryTimer = null;
+          this.flushSave();
+        }, retryDelay);
+      }
     } finally {
       this.saveInFlight = null;
       if (this.pendingState && this.phase === "connected") this.flushSave();
@@ -344,7 +418,11 @@ export class GoogleCloudService {
 
   signOut() {
     clearTimeout(this.saveTimer);
+    clearTimeout(this.saveRetryTimer);
     this.pendingState = null;
+    this.saveRetryTimer = null;
+    this.saveRetryCount = 0;
+    this.stopAuthorizationHeartbeat();
     this.idToken = "";
     this.accessToken = "";
     this.accessTokenExpiresAt = 0;

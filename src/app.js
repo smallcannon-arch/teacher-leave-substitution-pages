@@ -6,25 +6,27 @@ import {
   REASON_CODES,
   burdenLabel,
   leaveLabel,
-} from "./rules.js";
+} from "./rules.js?v=0.4.0";
 import {
   allocationBalance,
   calculateCase,
   caseTotals,
+  RULE_VERSION,
   roundMoney,
-} from "./calculator.js";
-import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js";
-import { parseRosterText, rosterTemplate } from "./importer.js";
-import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js";
-import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
-import { selectMonthlyCases } from "./monthly-selection.js";
-import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
-import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js";
-import { localIsoDate, localIsoMonth } from "./date-utils.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.8";
-import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.3.8";
-import { GoogleCloudService } from "./google-cloud.js";
+} from "./calculator.js?v=0.4.0";
+import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.0";
+import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.0";
+import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.0";
+import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.0";
+import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.0";
+import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.0";
+import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.0";
+import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.0";
+import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.0";
+import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.0";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.0";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.0";
+import { GoogleCloudService } from "./google-cloud.js?v=0.4.0";
 
 const app = document.querySelector("#app");
 let state = localStorageAdapter.load();
@@ -35,6 +37,7 @@ let personModalType = "staff";
 let toastTimer = null;
 let cloudUi = { phase: "initializing", message: "正在準備 Google 登入…", profile: null, connected: false };
 let pendingDriveChoice = null;
+let adminAccountUi = { loaded: false, loading: false, error: "", accounts: [] };
 const cloudAccessRequired = requiresCloudLogin(globalThis.location?.hostname);
 
 const googleCloud = new GoogleCloudService({
@@ -49,6 +52,7 @@ const googleCloud = new GoogleCloudService({
   chooseDriveData: (details) => chooseDriveData(details),
   onChange: (snapshot) => {
     cloudUi = snapshot;
+    if (!snapshot.profile?.is_central_admin) adminAccountUi = { loaded: false, loading: false, error: "", accounts: [] };
     render();
   },
   onSync: ({ ownerSub, syncedAt }) => {
@@ -117,8 +121,8 @@ function roleText(person) {
   return (person?.roles || []).map((role) => map[role]).filter(Boolean).join("、") || (isShortSub(person) ? "短代老師" : "未設定");
 }
 
-function substituteOptions(selectedId = "") {
-  const candidates = state.people.filter((person) => person.canSubstitute || person.id === selectedId);
+function substituteOptions(selectedId = "", excludedId = "") {
+  const candidates = state.people.filter((person) => person.id !== excludedId && (person.canSubstitute || person.id === selectedId));
   const renderGroup = (label, people) => people.length ? `<optgroup label="${label}">${people.map((person) => {
     const status = person.canSubstitute ? "" : "｜已暫不排代";
     const subjects = person.subjects ? `｜${person.subjects}` : "";
@@ -252,7 +256,7 @@ function render() {
         </nav>
         <button class="sidebar-support-link" type="button" data-open-error-report aria-label="回報系統錯誤"><span>!</span>錯誤回報</button>
         <div class="sidebar-foot">
-          規則版本：rules-0.2<br />
+          規則版本：${escapeHtml(RULE_VERSION)}<br />
           現行國小鐘點：${formatMoney(state.config.hourlyRate)} 元<br />
           個案資料：${state.meta?.storageMode === "drive" && cloudUi.connected ? "個人 Google Drive" : "瀏覽器本機快取"}
         </div>
@@ -313,7 +317,7 @@ function renderAccessGate() {
           <div><span>3</span><strong>進入系統</strong><small>自動讀取與同步主檔</small></div>
         </div>
         ${accountAction}
-        <div class="admin-boundary login-gate-boundary"><strong>資料仍由使用者保管</strong><span>案件與名冊不會存進中央後臺。</span><small>伺服端只驗證帳號資格；系統資料存放於登入者自己的 Google Drive 隱藏資料空間。</small></div>
+        <div class="admin-boundary login-gate-boundary"><strong>資料仍由使用者保管</strong><span>案件與名冊不會存進中央後臺。</span><small>伺服端只保存登入資格所需的帳號紀錄；系統資料存放於登入者自己的 Google Drive 隱藏資料空間。</small></div>
         ${renderAppFooter("login-gate-footer")}
       </section>
     </main>
@@ -493,8 +497,8 @@ function renderCaseEditor() {
           <div class="field span-12"><div class="help">精確時間供課表與受影響節次對應；請假時數仍以差勤核准資料為準，不直接由起訖時間相減。</div></div>
           <div class="field span-3"><label for="leaveHours">本次請假時數</label><input id="leaveHours" name="leaveHours" type="number" min="0" step="0.5" value="${c.leaveHours}" /><div class="help">時計額度用；不是代課節數。</div></div>
           <div class="field span-3"><label for="accumulatedHoursBefore">事假類請假前累計</label><input id="accumulatedHoursBefore" name="accumulatedHoursBefore" type="number" min="0" step="0.5" value="${c.accumulatedHoursBefore}" /><div class="help">事假＋家庭照顧假＋身心調適假，56 小時為七日。</div></div>
-          <div class="field span-3"><label for="consecutiveSickDays">連續病假日數</label><input id="consecutiveSickDays" name="consecutiveSickDays" type="number" min="0" step="1" value="${c.consecutiveSickDays}" /></div>
-          <div class="field span-3"><label for="businessTripDays">公差日數</label><input id="businessTripDays" name="businessTripDays" type="number" min="0" step="1" value="${c.businessTripDays}" /></div>
+          <div class="field span-3"><label for="consecutiveSickDays">連續病假日數</label><input id="consecutiveSickDays" name="consecutiveSickDays" type="number" min="0" step="1" value="${c.consecutiveSickDays}" /><div class="help">目前以整案連續日數判斷；分次假單或跨門檻個案請人工確認。</div></div>
+          <div class="field span-3"><label for="businessTripDays">公差日數</label><input id="businessTripDays" name="businessTripDays" type="number" min="0" step="1" value="${c.businessTripDays}" /><div class="help">目前以整案公差日數判斷；分次案件請依實際核定內容確認。</div></div>
         </div>
         ${crossing ? '<div class="notice warning">本案跨越 56 小時門檻。請在每個受影響節次標示「門檻內」或「超過門檻」，系統會分開判定自費與公費。</div>' : ""}
       </div>
@@ -510,7 +514,7 @@ function renderCaseEditor() {
               <td><input data-key="className" value="${escapeHtml(period.className || "")}" /></td>
               <td><select data-key="subject" aria-label="科目"><option value="">請選擇</option>${subjectOptions(period.subject || "")}</select></td>
               <td><select data-key="handling">${HANDLING_TYPES.map((item) => option(item.value, item.label, period.handling)).join("")}</select></td>
-              <td><select data-key="substituteId"><option value="">未指定</option>${substituteOptions(period.substituteId)}</select></td>
+              <td><select data-key="substituteId"><option value="">未指定</option>${substituteOptions(period.substituteId, c.teacherId)}</select></td>
               <td><select data-key="fundSourceId" aria-label="經費來源"><option value="">依規則判斷</option>${fundSourceOptions(period.fundSourceId)}</select></td>
               <td><select data-key="thresholdZone"><option value="">不適用／未選</option>${option("within", "門檻內", period.thresholdZone)}${option("over", "超過門檻", period.thresholdZone)}</select></td>
               <td><input data-key="isOvertime" type="checkbox" ${period.isOvertime ? "checked" : ""} /></td>
@@ -528,7 +532,7 @@ function renderCaseEditor() {
             : `<div class="form-grid">
                 <div class="field span-12"><div class="check-row"><input id="hasHomeroomDuty" name="hasHomeroomDuty" type="checkbox" ${c.hasHomeroomDuty ? "checked" : ""} /><label for="hasHomeroomDuty">本案需要代理導師職務</label></div></div>
                 ${c.hasHomeroomDuty ? `
-                  <div class="field"><label for="homeroomProxyId">導師職務代理人</label><select id="homeroomProxyId" name="homeroomProxyId"><option value="">請選擇</option>${substituteOptions(c.homeroomProxyId)}</select></div>
+                  <div class="field"><label for="homeroomProxyId">導師職務代理人</label><select id="homeroomProxyId" name="homeroomProxyId"><option value="">請選擇</option>${substituteOptions(c.homeroomProxyId, c.teacherId)}</select></div>
                   <div class="field span-3"><label for="homeroomStartDate">代理開始</label><input id="homeroomStartDate" name="homeroomStartDate" type="date" value="${escapeHtml(c.homeroomStartDate || c.startDate)}" /></div>
                   <div class="field span-3"><label for="homeroomStartPart">開始時段</label><select id="homeroomStartPart" name="homeroomStartPart">${option("am", "上午", c.homeroomStartPart)}${option("pm", "下午", c.homeroomStartPart)}</select></div>
                   <div class="field span-3"><label for="homeroomEndDate">代理結束</label><input id="homeroomEndDate" name="homeroomEndDate" type="date" value="${escapeHtml(c.homeroomEndDate || c.endDate)}" /></div>
@@ -549,6 +553,7 @@ function renderCalculation(c) {
     <div class="card" id="calculation-results">
       <div class="card-header"><div><h2>4. 規則判斷與費用項目</h2><p>規則 ${calc.versions.rules}／金額 ${calc.versions.rates}／AR ${calc.versions.reasons}</p></div><button class="btn btn-primary" id="mark-ready">完成覆核，標記可月結</button></div>
       ${calc.errors.length ? `<div class="notice danger"><strong>尚有 ${calc.errors.length} 項需處理：</strong><br />${calc.errors.map(escapeHtml).join("<br />")}</div>` : '<div class="notice">規則判斷已完成；請確認公費分攤是否平衡。</div>'}
+      ${(calc.warnings || []).length ? `<div class="notice warning"><strong>計算提醒：</strong><br />${calc.warnings.map(escapeHtml).join("<br />")}</div>` : ""}
       ${manualTrigger ? `<div class="notice warning"><strong>請人工計算代理導師鐘點費</strong><br />代理人 ${escapeHtml(proxy.name)} 為科任教師，請由承辦人另依規定人工計算。如需併入本案，可在計算完成後手動新增。<div class="button-row" style="margin-top:10px"><button class="btn btn-secondary btn-small" id="open-manual-fee">手動新增計算結果</button></div></div>` : ""}
       <div class="summary-strip">
         <div class="summary-item"><span>公費</span><strong>${formatMoney(totals.public)} 元</strong></div>
@@ -584,7 +589,7 @@ function renderCases() {
   return `
     ${pageHeading("", "代課費核算", "查看每筆請假案件的排代、試算與費用分攤結果。", `<button class="btn btn-primary" data-go="case">新增請假案件</button>`)}
     <div class="card">
-      <div class="card-header"><div><h2>全部案件</h2><p>已月結案件不可直接修改；更正版本功能尚未啟用。</p></div><span class="badge none">${state.cases.length} 案</span></div>
+      <div class="card-header"><div><h2>全部案件</h2><p>已月結案件不可直接修改；如需更正，請先到「月結與報表」解鎖。</p></div><span class="badge none">${state.cases.length} 案</span></div>
       ${renderCaseRows([...state.cases].reverse(), true)}
     </div>`;
 }
@@ -625,7 +630,7 @@ function renderAttendance() {
       <button class="btn btn-secondary" id="toggle-attendance-preview" aria-expanded="${previewOpen}" aria-controls="attendance-print-sheet" ${rows.length ? "" : "disabled"}>${previewOpen ? "收合預覽" : "預覽列印內容"}</button>
     </div>
     <div class="notice screen-only">本表只整理實際排代資料，不影響公費／自費判斷。簽名欄不存入系統，請列印後親筆簽名。</div>
-    ${missingClassRows.length ? `<div class="notice danger screen-only">尚有 ${missingClassRows.length} 節未填班級，補齊後才能列印：${missingClassRows.map((row) => `<button class="link-button" data-open-attendance-case="${row.caseId}">${escapeHtml(row.caseId)} 第 ${formatMoney(row.periodNo)} 節</button>`).join("、")}</div>` : ""}
+    ${missingClassRows.length ? `<div class="notice danger screen-only">尚有 ${missingClassRows.length} 節未填班級，補齊後才能列印：${missingClassRows.map((row) => `<button class="link-button" data-open-attendance-case="${row.caseId}">${escapeHtml(row.caseId)} 第 ${Number(row.periodNo)} 節</button>`).join("、")}</div>` : ""}
     <div class="attendance-summary screen-only">
       <div><span class="attendance-summary-label">本次列印</span><strong>${rows.length} 節</strong><span>${selectedSubstitute === "all" ? "全部代課教師" : escapeHtml(personName(selectedSubstitute))}</span></div>
       <div class="attendance-summary-details"><span>校內 ${internalCount} 節</span><span>外聘 ${externalCount} 節</span><span>${classCount} 個班級</span></div>
@@ -638,7 +643,7 @@ function renderAttendance() {
       </div>
       <div class="table-wrap"><table class="attendance-table"><thead><tr><th>節次</th><th>班級</th><th>科目</th><th>請假教師</th><th>代課教師</th><th>排代方式</th><th class="signature-column">代課教師簽名</th></tr></thead><tbody>
         ${rows.length ? rows.map((row) => `<tr>
-          <td><strong>第 ${formatMoney(row.periodNo)} 節</strong></td>
+          <td><strong>第 ${Number(row.periodNo)} 節</strong></td>
           <td><strong>${escapeHtml(row.className || "待補")}</strong></td>
           <td>${escapeHtml(row.subject || "未填")}</td>
           <td>${escapeHtml(personName(row.teacherId))}</td>
@@ -683,9 +688,14 @@ function renderMonthly() {
   const data = collectMonth(month);
   const exportRows = buildMonthlyExportRows(data.finalizedCases, month, state.people, state.fundSources);
   const canExport = exportRows.length > 0 && data.pending.length === 0;
+  const monthClose = activeMonthlyClose(state.monthlyCloses, month);
   return `
     ${pageHeading("", "月結與報表", "依實際代課發生日歸屬月份，可列印月結報表或下載本月費用明細。", `<div class="field" style="min-width:180px"><label for="month-picker">核算月份</label><input id="month-picker" type="month" value="${month}" /></div>`)}
-    ${data.pending.length ? `<div class="notice danger">本月仍有 ${data.pending.length} 案尚未完成覆核：${data.pending.map((item) => escapeHtml(item.id)).join("、")}</div>` : '<div class="notice">本月案件均已完成覆核，可列印或匯出費用明細。</div>'}
+    ${monthClose
+      ? `<div class="notice"><strong>${escapeHtml(month)} 已完成月結並鎖定</strong><br />鎖定時間：${escapeHtml(formatDateTime(monthClose.closedAt))}。鎖定案件不可修改或刪除；如需更正，請先解鎖。</div>`
+      : data.pending.length
+        ? `<div class="notice danger">本月仍有 ${data.pending.length} 案尚未完成覆核：${data.pending.map((item) => escapeHtml(item.id)).join("、")}</div>`
+        : '<div class="notice">本月案件均已完成覆核，可列印、匯出或完成月結鎖定。</div>'}
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-label">案件</div><div class="stat-value">${data.relevantCases.length}</div><div class="stat-note">實際發生日落在本月</div></div>
       <div class="stat-card"><div class="stat-label">公費</div><div class="stat-value">${formatMoney(data.totals.public)}</div><div class="stat-note">待依經費別送核</div></div>
@@ -699,7 +709,7 @@ function renderMonthly() {
           <h2>代課費用明細</h2>
           <div class="print-meta"><span>${escapeHtml(state.config.academicYear)} 學年度第 ${escapeHtml(state.config.term)} 學期</span><span>核算月份：${escapeHtml(month)}</span></div>
         </div>
-        <div class="card-header"><div><h2>費用明細</h2><p>列印供送核的月結報表，或下載可用試算表開啟的 CSV 明細。</p></div><div class="button-row screen-only"><button class="btn btn-secondary" id="print-monthly" ${canExport ? "" : "disabled"}>列印月結報表</button><button class="btn btn-primary" id="export-monthly" ${canExport ? "" : "disabled"}>下載明細 CSV</button></div></div>
+        <div class="card-header"><div><h2>費用明細</h2><p>列印供送核的月結報表，或下載可用試算表開啟的 CSV 明細。</p></div><div class="button-row screen-only"><button class="btn btn-secondary" id="print-monthly" ${canExport ? "" : "disabled"}>列印月結報表</button><button class="btn btn-secondary" id="export-monthly" ${canExport ? "" : "disabled"}>下載明細 CSV</button>${monthClose ? '<button class="btn btn-danger" id="unlock-month">解鎖月結</button>' : `<button class="btn btn-primary" id="close-month" ${canExport ? "" : "disabled"}>完成月結並鎖定</button>`}</div></div>
         <div class="backup-inline-hint screen-only"><div class="backup-hint-icon">備</div><div><strong>月結完成後，建議保留一份「完整備份」</strong><span>列印時系統會提醒下載。完整備份可匯入復原資料；CSV 只能查看明細，不能還原系統。</span></div></div>
         <div class="table-wrap"><table class="monthly-print-table"><thead><tr><th>日期</th><th>班級</th><th>費用項目</th><th>領款人</th><th>數量／單價</th><th>負擔</th><th>金額</th></tr></thead><tbody>${exportRows.map((row) => `<tr><td>${escapeHtml(row.dates || "—")}</td><td>${escapeHtml(row.classes || "—")}</td><td>${escapeHtml(row.feeType)}${row.manual ? ' <span class="badge manual">人工</span>' : ""}<small>${escapeHtml(row.caseId)}</small></td><td>${escapeHtml(row.payeeName)}</td><td>${formatMoney(row.quantity)} ${escapeHtml(row.unit)} × ${formatMoney(row.unitRate)}</td><td>${burdenBadge(row.burdenCode)}</td><td class="amount">${formatMoney(row.amount)} 元</td></tr>`).join("") || '<tr><td colspan="7" class="empty">本月尚無已試算費用。</td></tr>'}</tbody></table></div>
         <div class="monthly-print-summary">公費 ${formatMoney(data.totals.public)} 元　／　自費 ${formatMoney(data.totals.self)} 元　／　合計 ${formatMoney(data.totals.public + data.totals.self)} 元</div>
@@ -711,6 +721,26 @@ function renderMonthly() {
         <div class="notice warning">經費來源僅供記錄與月結統計，不代表系統認定該來源得合法支用。</div>
       </div>
     </div>`;
+}
+
+function renderAdminAccountsCard() {
+  if (!cloudUi.profile?.is_central_admin) return "";
+  let content = '<div class="empty">尚未讀取登入帳號。</div>';
+  if (adminAccountUi.loading) content = '<div class="empty">正在讀取登入帳號…</div>';
+  else if (adminAccountUi.error) content = `<div class="notice danger">${escapeHtml(adminAccountUi.error)}</div>`;
+  else if (adminAccountUi.loaded) {
+    content = `<div class="table-wrap admin-account-table"><table><thead><tr><th>帳號</th><th>教育網域</th><th>最近登入</th><th>狀態</th><th></th></tr></thead><tbody>${adminAccountUi.accounts.map((account) => {
+      const protectedAccount = account.protected === true;
+      const enabled = account.enabled !== false;
+      return `<tr><td><strong>${escapeHtml(account.name || account.email)}</strong><small>${escapeHtml(account.email)}</small></td><td>${escapeHtml(account.hosted_domain || (protectedAccount ? "中央管理帳號" : "—"))}</td><td>${escapeHtml(formatDateTime(account.last_login_at))}</td><td><span class="badge ${enabled ? "ready" : "pending"}">${enabled ? "可登入" : "已停用"}</span></td><td>${protectedAccount ? '<span class="muted">受保護</span>' : `<button class="btn ${enabled ? "btn-danger" : "btn-primary"} btn-small" type="button" data-toggle-login-account="${escapeHtml(account.subject)}" data-next-enabled="${enabled ? "false" : "true"}">${enabled ? "停用登入" : "恢復登入"}</button>`}</td></tr>`;
+    }).join("") || '<tr><td colspan="5" class="empty">尚無教育帳號登入紀錄。</td></tr>'}</tbody></table></div>`;
+  }
+  return `<div class="card admin-account-card">
+    <div class="card-header"><div><h2>登入帳號管理</h2><p>教育帳號第一次登入後會出現在此處；不需事前核准，只管理需要停用的例外帳號。</p></div><button class="btn btn-secondary btn-small" type="button" id="refresh-admin-accounts" ${adminAccountUi.loading ? "disabled" : ""}>重新整理</button></div>
+    <div class="notice warning"><strong>停用範圍：</strong>只阻擋此帳號進入本系統，不會刪除該帳號 Drive 內的資料。已登入者會在下次資格檢查（最遲約 5 分鐘）退出。</div>
+    ${content}
+    <div class="help">中央後臺只保存信箱、Google 帳號識別碼、教育網域、啟用狀態與登入時間；不保存學校名冊、請假案件或費用資料。</div>
+  </div>`;
 }
 
 function renderSettings() {
@@ -744,13 +774,14 @@ function renderSettings() {
       </div>
     </div>
     <div class="card access-policy-card">
-      <div class="card-header"><div><h2>帳號登入與中央管理</h2><p>教育網域帳號可直接登入；中央管理帳號只維護允許網域與規則版本，不讀取各校存在個人 Drive 的案件資料。</p></div><button class="btn btn-secondary" type="button" id="open-access-settings">查看登入說明</button></div>
+      <div class="card-header"><div><h2>帳號登入與中央管理</h2><p>教育網域帳號可直接登入；中央管理者可停用或恢復特定帳號，但不能讀取各校存在個人 Drive 的案件資料。</p></div><button class="btn btn-secondary" type="button" id="open-access-settings">查看登入說明</button></div>
       <div class="policy-grid">
         <div><strong>可直接登入</strong><span>縣市或學校核發、網域以 .edu.tw 結尾的 Google 教育帳號。</span></div>
         <div><strong>不接受</strong><span>@gmail.com、@googlemail.com 等個人 Google 帳號。</span></div>
-        <div><strong>中央管理者</strong><span>管理帳號只在伺服端綁定，前端無法自行取得管理權。</span></div>
+        <div><strong>中央管理者</strong><span>管理權由伺服器認定，可停用例外帳號；中央帳號本身受保護。</span></div>
       </div>
     </div>
+    ${renderAdminAccountsCard()}
     <div class="card">
       <div class="card-header"><div><h2>科目基本資料</h2><p>排代明細會使用此清單作為科目下拉選單。</p></div></div>
       <form id="subject-form" class="subject-add-row"><div class="field"><label for="newSubject">新增科目</label><input id="newSubject" name="subject" maxlength="30" placeholder="例如：資訊、國樂團" required /></div><button class="btn btn-primary" type="submit">新增科目</button></form>
@@ -826,14 +857,14 @@ function renderModal() {
         ${cloudUi.phase === "unavailable" ? '<button class="btn btn-secondary full-button" type="button" id="retry-google">重新連接登入服務</button>' : ""}`;
     }
     return `<div class="dialog-backdrop" role="dialog" aria-modal="true"><div class="dialog access-dialog"><div class="card-header"><div><h2>Google 帳號登入</h2><p>教育網域帳號可直接使用；登入後再連接自己的 Google Drive。</p></div><button class="btn btn-secondary btn-small" data-close-modal>關閉</button></div>
-      <div class="notice warning account-rule"><strong>一般使用者登入規定</strong><br />請使用縣市教育網路或學校核發的 Google Workspace 教育帳號，網域須以 <b>.edu.tw</b> 結尾。<br /><b>不接受 @gmail.com 或 @googlemail.com 個人帳號。</b><br />中央管理帳號為唯一例外，僅用於維護允許網域與規則版本。</div>
+      <div class="notice warning account-rule"><strong>一般使用者登入規定</strong><br />請使用縣市教育網路或學校核發的 Google Workspace 教育帳號，網域須以 <b>.edu.tw</b> 結尾。<br /><b>不接受 @gmail.com 或 @googlemail.com 個人帳號。</b><br />中央管理帳號為唯一例外，可管理例外帳號的登入資格。</div>
       <div class="application-flow">
         <div><span>1</span><strong>Google 登入</strong><small>伺服端確認身分</small></div>
         <div><span>2</span><strong>連接 Drive</strong><small>授權隱藏資料夾</small></div>
         <div><span>3</span><strong>自動存取</strong><small>讀取與同步主檔</small></div>
       </div>
       ${accountAction}
-      <div class="admin-boundary"><strong>權限邊界</strong><span>管理權由伺服端驗證，不能修改前端取得。</span><small>伺服端只驗證帳號資格與角色，不接收各校的請假案件、名冊或費用資料。</small></div>
+      <div class="admin-boundary"><strong>權限邊界</strong><span>管理權由伺服端驗證，不能修改前端取得。</span><small>伺服端只保存登入資格需要的帳號資訊，不接收各校的請假案件、名冊或費用資料。</small></div>
     </div></div>`;
   }
   if (modal === "drive-data-choice" && pendingDriveChoice) {
@@ -1233,6 +1264,11 @@ function validateDraft() {
   if (draftCase.leaveType === "official" && !draftCase.officialReason) errors.push("公假必須選擇事由分類。 ");
   if (draftCase.hasHomeroomDuty && !personById(draftCase.teacherId)?.roles?.includes("homeroom")) errors.push("只有導師請假案件可以勾選導師職務代理。 ");
   if (draftCase.hasHomeroomDuty && !draftCase.homeroomProxyId) errors.push("已勾選導師職務代理，請指定代理人。 ");
+  if (draftCase.hasHomeroomDuty && draftCase.homeroomProxyId === draftCase.teacherId) errors.push("導師職務代理人不可為請假教師本人。 ");
+  const selfSubstitutePeriod = draftCase.affectedPeriods.find((period) => period.substituteId && period.substituteId === draftCase.teacherId);
+  if (selfSubstitutePeriod) errors.push(`第 ${selfSubstitutePeriod.periodNo} 節的代課者不可為請假教師本人。 `);
+  const lockedMonths = lockedMonthsForCase(draftCase, state.monthlyCloses);
+  if (lockedMonths.length) errors.push(`${lockedMonths.join("、")} 已完成月結並鎖定，請先到月結頁解鎖。 `);
   return errors;
 }
 
@@ -1283,6 +1319,10 @@ function calculateDraft() {
 
 function markReady() {
   syncDraftFromForm();
+  if (!draftCase.calculation) {
+    render();
+    return showToast("案件內容已變更，舊試算已失效，請重新執行試算");
+  }
   if (draftCase.calculation.errors.length) return showToast("仍有規則或排代錯誤，尚不能標記可月結");
   for (const fee of draftCase.calculation.feeItems.filter((item) => item.burden === BURDEN.PUBLIC)) {
     if (allocationBalance(fee, allocationRowsFor(draftCase, fee.id)) !== 0) return showToast(`「${fee.ruleTitle}」的公費分攤尚未平衡`);
@@ -1327,7 +1367,7 @@ function bindCasesEvents() {
   document.querySelectorAll("[data-delete-case]").forEach((button) => button.addEventListener("click", () => {
     const id = button.dataset.deleteCase;
     const target = state.cases.find((item) => item.id === id);
-    if (target?.status === "closed") return showToast("已月結案件不能直接刪除，應建立更正紀錄");
+    if (target && (target.status === "closed" || lockedMonthsForCase(target, state.monthlyCloses).length)) return showToast("已月結案件不能直接刪除，請先到月結頁解鎖");
     if (!confirm(`確定刪除案件 ${id}？`)) return;
     state.cases = state.cases.filter((item) => item.id !== id);
     saveState("delete-case", id);
@@ -1338,7 +1378,7 @@ function bindCasesEvents() {
 function openCase(id) {
   const target = state.cases.find((item) => item.id === id);
   if (!target) return showToast("找不到案件");
-  if (target.status === "closed") return showToast("已月結案件不可直接修改；更正版本功能尚未啟用");
+  if (target.status === "closed" || lockedMonthsForCase(target, state.monthlyCloses).length) return showToast("已月結案件不可直接修改；請先到月結頁解鎖");
   draftCase = structuredClone(target);
   activePage = "case";
   render();
@@ -1373,6 +1413,43 @@ function bindMonthlyEvents() {
   });
   document.querySelector("#print-monthly")?.addEventListener("click", printMonthly);
   document.querySelector("#export-monthly")?.addEventListener("click", exportMonthlyCsv);
+  document.querySelector("#close-month")?.addEventListener("click", closeSelectedMonth);
+  document.querySelector("#unlock-month")?.addEventListener("click", unlockSelectedMonth);
+}
+
+function closeSelectedMonth() {
+  const month = document.querySelector("#month-picker")?.value || firstCaseMonth();
+  const data = collectMonth(month);
+  const exportRows = buildMonthlyExportRows(data.finalizedCases, month, state.people, state.fundSources);
+  if (data.pending.length) return showToast("本月仍有待處理案件，完成覆核後才能鎖定月結");
+  if (!exportRows.length) return showToast("本月沒有可月結的費用明細");
+  if (!confirm(`確定完成 ${month} 月結並鎖定？\n\n鎖定後，相關案件不可修改或刪除；如需更正，可再使用「解鎖月結」。`)) return;
+  try {
+    const close = applyMonthClose(state, {
+      month,
+      closeId: newId("MC"),
+      totals: data.totals,
+      ruleVersion: RULE_VERSION,
+    });
+    saveState("close-month", close.id);
+    render();
+    showToast(`${month} 已完成月結並鎖定`);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function unlockSelectedMonth() {
+  const month = document.querySelector("#month-picker")?.value || firstCaseMonth();
+  if (!confirm(`確定解鎖 ${month} 月結？\n\n解鎖後可修改該月案件；未修改案件會保留原試算與分攤，只有實際變更的案件需要重新試算及覆核。`)) return;
+  try {
+    const close = applyMonthUnlock(state, month);
+    saveState("unlock-month", close.id);
+    render();
+    showToast(`${month} 已解鎖；只有實際修改的案件需要重新試算`);
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 function printMonthly() {
@@ -1474,6 +1551,43 @@ async function importFullBackup(input) {
   }
 }
 
+async function loadAdminAccounts() {
+  if (!cloudUi.profile?.is_central_admin || adminAccountUi.loading) return;
+  adminAccountUi = { ...adminAccountUi, loading: true, error: "" };
+  render();
+  try {
+    const result = await googleCloud.listLoginAccounts();
+    adminAccountUi = {
+      loaded: true,
+      loading: false,
+      error: "",
+      accounts: Array.isArray(result.accounts) ? result.accounts : [],
+    };
+  } catch (error) {
+    adminAccountUi = {
+      loaded: true,
+      loading: false,
+      error: error.message || "目前無法讀取登入帳號",
+      accounts: [],
+    };
+  }
+  render();
+}
+
+async function updateAdminAccount(subject, nextEnabled) {
+  const account = adminAccountUi.accounts.find((item) => item.subject === subject);
+  if (!account || account.role === "central_admin") return;
+  if (!nextEnabled && !confirm(`確定停用「${account.email}」登入本系統？\n\n不會刪除該帳號 Drive 內的資料，日後可再恢復。`)) return;
+  try {
+    const result = await googleCloud.updateLoginAccount(subject, nextEnabled);
+    adminAccountUi.accounts = adminAccountUi.accounts.map((item) => item.subject === subject ? result.account : item);
+    render();
+    showToast(nextEnabled ? "帳號已恢復登入" : "帳號已停用");
+  } catch (error) {
+    showToast(error.message || "帳號狀態更新失敗");
+  }
+}
+
 function bindSettingsEvents() {
   document.querySelector("#settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1491,7 +1605,10 @@ function bindSettingsEvents() {
     const nextCalculationSettings = `${state.config.hourlyRate}|${state.config.homeroomMonthly}|${state.config.roundingMode}`;
     const invalidatedCount = previousCalculationSettings === nextCalculationSettings
       ? 0
-      : state.cases.reduce((count, leaveCase) => count + (invalidateCaseCalculation(leaveCase) ? 1 : 0), 0);
+      : state.cases.reduce((count, leaveCase) => {
+        if (lockedMonthsForCase(leaveCase, state.monthlyCloses).length) return count;
+        return count + (invalidateCaseCalculation(leaveCase) ? 1 : 0);
+      }, 0);
     saveState("update-settings", "config");
     render();
     showToast(invalidatedCount ? `設定已儲存；${invalidatedCount} 件既有試算已失效，請重新試算` : "設定已儲存");
@@ -1500,6 +1617,10 @@ function bindSettingsEvents() {
   document.querySelector("#export-backup")?.addEventListener("click", exportFullBackup);
   document.querySelector("#import-backup")?.addEventListener("change", (event) => importFullBackup(event.currentTarget));
   document.querySelector("#open-access-settings")?.addEventListener("click", () => { modal = "access"; render(); });
+  document.querySelector("#refresh-admin-accounts")?.addEventListener("click", () => loadAdminAccounts());
+  document.querySelectorAll("[data-toggle-login-account]").forEach((button) => button.addEventListener("click", () => {
+    updateAdminAccount(button.dataset.toggleLoginAccount, button.dataset.nextEnabled === "true");
+  }));
   document.querySelector("#subject-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const subject = new FormData(event.currentTarget).get("subject").trim();
@@ -1552,6 +1673,9 @@ function bindSettingsEvents() {
     render();
     showToast("全部本機資料已清空");
   });
+  if (cloudUi.profile?.is_central_admin && !adminAccountUi.loaded && !adminAccountUi.loading) {
+    queueMicrotask(() => loadAdminAccounts());
+  }
 }
 
 function bindFundSourceModal() {

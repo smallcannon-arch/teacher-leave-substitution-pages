@@ -1,3 +1,5 @@
+import { RULE_VERSION } from "./calculator.js?v=0.4.0";
+
 const STORAGE_KEY = "hsinchu-substitute-fee-desk-v01";
 const LEGACY_DEMO_CASE_ID = "C-DEMO-001";
 const DEMO_CASE_ID = "115-1-20260907-001";
@@ -46,17 +48,31 @@ export function normalizeState(state) {
   state.cases = Array.isArray(state.cases) ? state.cases : [];
   state.monthlyCloses = Array.isArray(state.monthlyCloses) ? state.monthlyCloses : [];
   state.auditEvents = Array.isArray(state.auditEvents) ? state.auditEvents : [];
-  state.fundSources = (state.fundSources || []).map((source) => ({
+  const normalizedFundSources = (Array.isArray(state.fundSources) ? state.fundSources : []).map((source) => ({
     ...source,
     burdenType: source.burdenType || (source.id === "FS-SELF" ? "self" : "public"),
     custom: source.custom === true,
   }));
-  if (!state.fundSources.some((source) => source.id === "FS-SELF")) {
-    state.fundSources.push({ ...DEFAULT_FUND_SOURCES.find((source) => source.id === "FS-SELF") });
-  }
+  const builtInIds = new Set(DEFAULT_FUND_SOURCES.map((source) => source.id));
+  state.fundSources = [
+    ...DEFAULT_FUND_SOURCES.map((defaultSource) => {
+      const existing = normalizedFundSources.find((source) => source.id === defaultSource.id);
+      return existing ? { ...defaultSource, ...existing, custom: false } : { ...defaultSource };
+    }),
+    ...normalizedFundSources.filter((source) => !builtInIds.has(source.id)),
+  ];
   for (const leaveCase of state.cases || []) {
     for (const period of leaveCase.affectedPeriods || []) period.fundSourceId ||= "";
-    if (leaveCase.calculation?.versions?.rules) leaveCase.calculation.versions.rules = "rules-0.2+decision-2026.07";
+    if (leaveCase.calculation) {
+      leaveCase.calculation.versions ||= {};
+      leaveCase.calculation.versions.rules ||= RULE_VERSION;
+    }
+  }
+  const lockedCaseIds = new Set(state.monthlyCloses
+    .filter((close) => !close.unlockedAt)
+    .flatMap((close) => close.caseIds || []));
+  for (const leaveCase of state.cases) {
+    if (lockedCaseIds.has(leaveCase.id)) leaveCase.status = "closed";
   }
   return state;
 }

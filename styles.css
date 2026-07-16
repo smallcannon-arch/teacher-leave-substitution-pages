@@ -768,6 +768,21 @@ h3 {
   grid-column: auto;
 }
 
+.admin-account-table td:first-child strong,
+.admin-account-table td:first-child small {
+  display: block;
+}
+
+.admin-account-table td:first-child small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-account-card > .help {
+  margin-top: 12px;
+}
+
 .application-flow {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin: 20px 0;
