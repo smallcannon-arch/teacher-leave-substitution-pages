@@ -19,8 +19,8 @@ import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js"
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.3";
-import { APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildSupportMailto } from "./support.js?v=0.3.3";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.4";
+import { APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildSupportMailto } from "./support.js?v=0.3.4";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
@@ -55,6 +55,7 @@ const googleCloud = new GoogleCloudService({
     state.meta.lastSyncedAt = syncedAt;
     localStorageAdapter.save(state);
   },
+  autoConnectDrive: true,
 });
 
 const navItems = [
@@ -279,7 +280,7 @@ function renderAccessGate() {
         <span class="badge pending">身分已確認</span>
       </div>
       ${cloudUi.message ? `<div class="notice ${failed ? "danger" : ""}">${escapeHtml(cloudUi.message)}</div>` : ""}
-      <button class="btn btn-primary full-button" type="button" id="gate-authorize-drive" ${busy ? "disabled" : ""}>${busy ? "正在連接 Google Drive…" : "連接個人 Google Drive 並進入系統"}</button>
+      <button class="btn btn-primary full-button" type="button" id="gate-authorize-drive" ${busy ? "disabled" : ""}>${busy ? "正在完成登入與資料授權…" : "繼續授權資料儲存並進入系統"}</button>
       <button class="btn btn-secondary full-button login-gate-secondary" type="button" id="gate-sign-out" ${busy ? "disabled" : ""}>改用其他帳號</button>`;
   } else {
     accountAction = `
@@ -292,15 +293,15 @@ function renderAccessGate() {
     <main class="login-gate">
       <section class="login-gate-card" aria-labelledby="login-gate-title">
         <div class="login-gate-brand"><span class="brand-mark">鐘</span><div><strong>課務核算台</strong><small>Substitute Fee Desk</small></div></div>
-        <div class="login-gate-heading"><span>正式使用入口</span><h1 id="login-gate-title">使用 Google 教育帳號登入</h1><p>完成帳號確認並連接自己的 Google Drive 後，才會開啟系統與讀取資料。</p></div>
+        <div class="login-gate-heading"><span>正式使用入口</span><h1 id="login-gate-title">使用 Google 教育帳號登入</h1><p>只要按一次 Google 登入，系統會在確認帳號後接續 Drive 資料授權，完成後直接進入系統。</p></div>
         <div class="notice warning account-rule"><strong>登入規定</strong><br />一般使用者請使用縣市或學校核發、網域以 <b>.edu.tw</b> 結尾的 Google Workspace 教育帳號。個人 Gmail 不開放；中央管理帳號除外。</div>
         <div class="drive-connection-reason">
           <div class="drive-reason-mark">Drive</div>
-          <div><h2>為什麼要連接 Google Drive？</h2><p>${escapeHtml(DRIVE_CONNECTION_REASON)}</p><ul><li>只使用本系統專用的隱藏資料空間。</li><li>無法查看、搜尋或修改雲端硬碟中的其他檔案。</li><li>資料仍由登入帳號保管，可另行匯出完整備份。</li></ul></div>
+          <div><h2>為什麼要連接 Google Drive？</h2><p>${escapeHtml(DRIVE_CONNECTION_REASON)}</p><ul><li>只使用本系統專用的隱藏資料空間。</li><li>無法查看、搜尋或修改雲端硬碟中的其他檔案。</li><li>資料仍由登入帳號保管，可另行匯出完整備份。</li><li>第一次使用時，Google 可能連續顯示選帳號與權限確認；這是同一次登入流程。</li></ul></div>
         </div>
         <div class="application-flow login-gate-flow">
-          <div><span>1</span><strong>Google 登入</strong><small>伺服端確認帳號資格</small></div>
-          <div><span>2</span><strong>連接 Drive</strong><small>只授權隱藏資料空間</small></div>
+          <div><span>1</span><strong>按一次登入</strong><small>伺服端確認帳號資格</small></div>
+          <div><span>2</span><strong>接續授權</strong><small>Google 首次確認儲存權限</small></div>
           <div><span>3</span><strong>進入系統</strong><small>自動讀取與同步主檔</small></div>
         </div>
         ${accountAction}
@@ -792,7 +793,7 @@ function renderModal() {
         <div class="button-row"><button class="btn btn-primary" type="button" data-close-modal>開始使用</button><button class="btn btn-secondary" type="button" id="google-sign-out">登出</button></div>`;
     } else if (cloudUi.profile) {
       accountAction = `<div class="cloud-profile"><div><strong>${escapeHtml(cloudUi.profile.name || cloudUi.profile.email)}</strong><span>${escapeHtml(cloudUi.profile.email)}${cloudUi.profile.is_central_admin ? "・中央管理者" : "・教育帳號"}</span></div><span class="badge pending">帳號已確認</span></div>
-        <button class="btn btn-primary full-button" type="button" id="authorize-drive" ${busy ? "disabled" : ""}>連接個人 Google Drive</button>
+        <button class="btn btn-primary full-button" type="button" id="authorize-drive" ${busy ? "disabled" : ""}>繼續授權資料儲存</button>
         <div class="help">只要求隱藏應用程式資料夾權限，不會讀取雲端硬碟中的其他檔案。</div>`;
     } else {
       const kind = ["denied", "error", "unavailable"].includes(cloudUi.phase) ? "danger" : "";

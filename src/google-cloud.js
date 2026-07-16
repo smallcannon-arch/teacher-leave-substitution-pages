@@ -22,6 +22,12 @@ export function decideAutomaticDriveChoice({ localMeta = {}, remoteExportedAt = 
   return "remote";
 }
 
+export function driveTokenRequestOptions(email = "") {
+  const options = { prompt: "" };
+  if (String(email || "").trim()) options.login_hint = String(email).trim();
+  return options;
+}
+
 function hasMeaningfulData(state) {
   return Boolean(state?.people?.length || state?.cases?.length || state?.monthlyCloses?.length);
 }
@@ -48,13 +54,14 @@ function loadGoogleScript() {
 }
 
 export class GoogleCloudService {
-  constructor({ apiBaseUrl, getState, applyRemoteState, chooseDriveData, onChange, onSync }) {
+  constructor({ apiBaseUrl, getState, applyRemoteState, chooseDriveData, onChange, onSync, autoConnectDrive = false }) {
     this.apiBaseUrl = String(apiBaseUrl || "").replace(/\/$/, "");
     this.getState = getState;
     this.applyRemoteState = applyRemoteState;
     this.chooseDriveData = chooseDriveData;
     this.onChange = onChange;
     this.onSync = onSync;
+    this.autoConnectDrive = autoConnectDrive;
     this.phase = "initializing";
     this.message = "正在準備 Google 登入…";
     this.profile = null;
@@ -109,7 +116,7 @@ export class GoogleCloudService {
         client_id: this.clientId,
         scope: this.driveScope,
         callback: (responseValue) => this.handleDriveToken(responseValue),
-        error_callback: () => this.update("signed-in", "Google Drive 授權未完成，資料仍保存在本機"),
+        error_callback: () => this.update("signed-in", "瀏覽器需要再次確認資料儲存授權，請按下方按鈕繼續"),
       });
       this.update("ready", "請使用教育網域 Google 帳號登入");
     } catch (error) {
@@ -148,7 +155,17 @@ export class GoogleCloudService {
       if (!this.idToken) throw new Error("Google 未回傳登入憑證");
       this.update("verifying", "正在由伺服端確認帳號資格…");
       this.profile = await this.apiRequest("/auth/me");
-      this.update("signed-in", "帳號已確認，請連接個人 Google Drive");
+      if (this.autoConnectDrive && this.tokenClient) {
+        this.update("authorizing-drive", "帳號已確認，正在接續 Google Drive 資料儲存授權…");
+        try {
+          this.tokenClient.requestAccessToken(driveTokenRequestOptions(this.profile.email));
+          return;
+        } catch {
+          this.update("signed-in", "瀏覽器需要再次確認資料儲存授權，請按下方按鈕繼續");
+          return;
+        }
+      }
+      this.update("signed-in", "帳號已確認，請繼續授權資料儲存");
     } catch (error) {
       this.idToken = "";
       this.profile = null;
@@ -162,12 +179,18 @@ export class GoogleCloudService {
       return;
     }
     this.update("authorizing-drive", "正在取得個人 Google Drive 儲存權限…");
-    this.tokenClient.requestAccessToken();
+    this.tokenClient.requestAccessToken(driveTokenRequestOptions(this.profile.email));
   }
 
   async handleDriveToken(response) {
     if (!response?.access_token || response.error) {
       this.update("signed-in", "Google Drive 授權未完成，資料仍保存在本機");
+      return;
+    }
+    const requestedScopes = String(this.driveScope || "").split(/\s+/).filter(Boolean);
+    const scopeChecker = globalThis.google?.accounts?.oauth2?.hasGrantedAllScopes;
+    if (requestedScopes.length && typeof scopeChecker === "function" && !scopeChecker(response, ...requestedScopes)) {
+      this.update("signed-in", "尚未同意資料儲存權限，請按下方按鈕重新授權");
       return;
     }
     this.accessToken = response.access_token;
