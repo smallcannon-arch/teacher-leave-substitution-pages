@@ -809,6 +809,86 @@ h3 {
   margin: 16px 0;
 }
 
+.login-gate {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px 20px;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(13, 118, 110, 0.16), transparent 34%),
+    linear-gradient(145deg, #f7f5ef 0%, #edf3f1 100%);
+}
+
+.login-gate-card {
+  width: min(760px, 100%);
+  padding: 30px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 70px rgba(22, 50, 74, 0.14);
+}
+
+.login-gate-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  color: var(--navy);
+}
+
+.login-gate-brand .brand-mark {
+  color: #fff;
+  background: var(--navy);
+}
+
+.login-gate-brand strong,
+.login-gate-brand small {
+  display: block;
+}
+
+.login-gate-brand strong {
+  font-size: 18px;
+}
+
+.login-gate-brand small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.login-gate-heading > span {
+  color: var(--teal);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+
+.login-gate-heading h1 {
+  margin: 8px 0 10px;
+  color: var(--navy);
+  font-size: clamp(28px, 5vw, 42px);
+  line-height: 1.15;
+}
+
+.login-gate-heading p {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.login-gate-flow {
+  margin: 18px 0;
+}
+
+.login-gate-secondary {
+  margin-top: 10px;
+}
+
+.login-gate-boundary {
+  margin-bottom: 0;
+}
+
 .cloud-profile {
   display: flex;
   align-items: center;
@@ -1840,6 +1920,20 @@ td select {
 }
 
 @media (max-width: 780px) {
+  .login-gate {
+    padding: 14px;
+    place-items: start center;
+  }
+
+  .login-gate-card {
+    padding: 22px 18px;
+    border-radius: 16px;
+  }
+
+  .login-gate-brand {
+    margin-bottom: 18px;
+  }
+
   .app-shell {
     grid-template-columns: 1fr;
   }

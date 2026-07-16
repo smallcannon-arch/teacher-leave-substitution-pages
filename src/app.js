@@ -19,7 +19,7 @@ import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js"
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG } from "./app-config.js";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
@@ -31,6 +31,7 @@ let personModalType = "staff";
 let toastTimer = null;
 let cloudUi = { phase: "initializing", message: "正在準備 Google 登入…", profile: null, connected: false };
 let pendingDriveChoice = null;
+const cloudAccessRequired = requiresCloudLogin(globalThis.location?.hostname);
 
 const googleCloud = new GoogleCloudService({
   apiBaseUrl: APP_CONFIG.apiBaseUrl,
@@ -209,6 +210,10 @@ function isEditingExistingCase() {
 }
 
 function render() {
+  if (cloudAccessRequired && !cloudUi.connected) {
+    renderAccessGate();
+    return;
+  }
   const activeNavPage = isEditingExistingCase() ? "cases" : activePage;
   app.innerHTML = `
     <div class="app-shell">
@@ -249,6 +254,49 @@ function render() {
     ${renderModal()}`;
   bindCommonEvents();
   bindPageEvents();
+  googleCloud.mountSignInButton(document.querySelector("#google-signin-slot"));
+}
+
+function renderAccessGate() {
+  const busy = ["initializing", "verifying", "authorizing-drive", "loading-drive", "saving"].includes(cloudUi.phase);
+  const failed = ["denied", "error", "unavailable"].includes(cloudUi.phase);
+  let accountAction = "";
+
+  if (cloudUi.profile) {
+    accountAction = `
+      <div class="cloud-profile">
+        <div><strong>${escapeHtml(cloudUi.profile.name || cloudUi.profile.email)}</strong><span>${escapeHtml(cloudUi.profile.email)}${cloudUi.profile.is_central_admin ? "・中央管理者" : "・教育帳號"}</span></div>
+        <span class="badge pending">身分已確認</span>
+      </div>
+      ${cloudUi.message ? `<div class="notice ${failed ? "danger" : ""}">${escapeHtml(cloudUi.message)}</div>` : ""}
+      <button class="btn btn-primary full-button" type="button" id="gate-authorize-drive" ${busy ? "disabled" : ""}>${busy ? "正在連接 Google Drive…" : "連接個人 Google Drive 並進入系統"}</button>
+      <button class="btn btn-secondary full-button login-gate-secondary" type="button" id="gate-sign-out" ${busy ? "disabled" : ""}>改用其他帳號</button>`;
+  } else {
+    accountAction = `
+      ${cloudUi.message ? `<div class="notice ${failed ? "danger" : ""}">${escapeHtml(cloudUi.message)}</div>` : ""}
+      <div id="google-signin-slot" class="google-signin-slot" aria-label="Google 登入按鈕"></div>
+      ${cloudUi.phase === "unavailable" ? '<button class="btn btn-secondary full-button" type="button" id="gate-retry-google">重新連接登入服務</button>' : ""}`;
+  }
+
+  app.innerHTML = `
+    <main class="login-gate">
+      <section class="login-gate-card" aria-labelledby="login-gate-title">
+        <div class="login-gate-brand"><span class="brand-mark">鐘</span><div><strong>課務核算台</strong><small>Substitute Fee Desk</small></div></div>
+        <div class="login-gate-heading"><span>正式使用入口</span><h1 id="login-gate-title">使用 Google 教育帳號登入</h1><p>完成帳號確認並連接自己的 Google Drive 後，才會開啟系統與讀取資料。</p></div>
+        <div class="notice warning account-rule"><strong>登入規定</strong><br />一般使用者請使用縣市或學校核發、網域以 <b>.edu.tw</b> 結尾的 Google Workspace 教育帳號。個人 Gmail 不開放；中央管理帳號除外。</div>
+        <div class="application-flow login-gate-flow">
+          <div><span>1</span><strong>Google 登入</strong><small>伺服端確認帳號資格</small></div>
+          <div><span>2</span><strong>連接 Drive</strong><small>只授權隱藏資料空間</small></div>
+          <div><span>3</span><strong>進入系統</strong><small>自動讀取與同步主檔</small></div>
+        </div>
+        ${accountAction}
+        <div class="admin-boundary login-gate-boundary"><strong>資料仍由使用者保管</strong><span>案件與名冊不會存進中央後臺。</span><small>伺服端只驗證帳號資格；系統資料存放於登入者自己的 Google Drive 隱藏資料空間。</small></div>
+      </section>
+    </main>`;
+
+  document.querySelector("#gate-authorize-drive")?.addEventListener("click", () => googleCloud.requestDriveAccess());
+  document.querySelector("#gate-sign-out")?.addEventListener("click", () => googleCloud.signOut());
+  document.querySelector("#gate-retry-google")?.addEventListener("click", () => googleCloud.initialize());
   googleCloud.mountSignInButton(document.querySelector("#google-signin-slot"));
 }
 
