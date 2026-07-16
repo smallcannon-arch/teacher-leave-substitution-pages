@@ -19,7 +19,8 @@ import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js"
 import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js";
 import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js";
 import { backupFilename, createBackup, parseBackup } from "./backup.js";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.1";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.3.2";
+import { APP_VERSION, COPYRIGHT_NOTICE, SUPPORT_EMAIL, buildSupportMailto } from "./support.js?v=0.3.2";
 import { GoogleCloudService } from "./google-cloud.js";
 
 const app = document.querySelector("#app");
@@ -195,6 +196,14 @@ function accountButtonText() {
   return cloudUi.connected ? `${name}・已連接` : `${name}・連接 Drive`;
 }
 
+function renderAppFooter(extraClass = "") {
+  const reportUrl = escapeHtml(buildSupportMailto());
+  return `<footer class="app-footer ${escapeHtml(extraClass)}">
+    <div class="footer-copyright"><strong>${escapeHtml(COPYRIGHT_NOTICE)}</strong><span>江志宏 · 系統版本 ${escapeHtml(APP_VERSION)}</span></div>
+    <div class="footer-support"><a class="error-report-link" href="${reportUrl}">錯誤回報</a><span>請附發生時間、操作步驟、錯誤訊息與不含個資的截圖。</span><a href="mailto:${escapeHtml(SUPPORT_EMAIL)}">${escapeHtml(SUPPORT_EMAIL)}</a></div>
+  </footer>`;
+}
+
 function showToast(message) {
   document.querySelector(".toast")?.remove();
   const node = document.createElement("div");
@@ -249,6 +258,7 @@ function render() {
           </div>
         </header>
         <section class="content page-${activePage} ${activePage === "dashboard" ? "dashboard-content" : ""}">${renderPage()}</section>
+        ${renderAppFooter("main-footer")}
       </main>
     </div>
     ${renderModal()}`;
@@ -291,6 +301,7 @@ function renderAccessGate() {
         </div>
         ${accountAction}
         <div class="admin-boundary login-gate-boundary"><strong>資料仍由使用者保管</strong><span>案件與名冊不會存進中央後臺。</span><small>伺服端只驗證帳號資格；系統資料存放於登入者自己的 Google Drive 隱藏資料空間。</small></div>
+        ${renderAppFooter("login-gate-footer")}
       </section>
     </main>`;
 
