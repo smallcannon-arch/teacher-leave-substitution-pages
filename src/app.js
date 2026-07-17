@@ -6,32 +6,34 @@ import {
   REASON_CODES,
   burdenLabel,
   leaveLabel,
-} from "./rules.js?v=0.4.2";
+} from "./rules.js?v=0.4.3";
 import {
   allocationBalance,
   calculateCase,
   caseTotals,
   RULE_VERSION,
   roundMoney,
-} from "./calculator.js?v=0.4.2";
-import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.2";
-import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.2";
-import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.2";
-import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.2";
-import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.2";
-import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.2";
-import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.2";
-import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.2";
-import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.2";
-import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.2";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.2";
-import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.2";
-import { GoogleCloudService } from "./google-cloud.js?v=0.4.2";
+} from "./calculator.js?v=0.4.3";
+import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.3";
+import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.3";
+import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.3";
+import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.3";
+import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.3";
+import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.3";
+import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.3";
+import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.3";
+import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.3";
+import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.3";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.3";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.3";
+import { GoogleCloudService } from "./google-cloud.js?v=0.4.3";
+import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.3";
 
 const app = document.querySelector("#app");
 let state = localStorageAdapter.load();
 let activePage = "dashboard";
 let draftCase = null;
+let draftBaseline = "";
 let modal = null;
 let personModalType = "staff";
 let toastTimer = null;
@@ -100,6 +102,19 @@ function formatDateTime(value) {
 
 function todayMonth() {
   return localIsoMonth();
+}
+
+function rememberDraftBaseline() {
+  draftBaseline = draftFingerprint(draftCase);
+}
+
+function clearDraftCase() {
+  draftCase = null;
+  draftBaseline = "";
+}
+
+function hasUnsavedDraft() {
+  return activePage === "case" && isDraftDirty(draftCase, draftBaseline);
 }
 
 function localDateValue(date = new Date()) {
@@ -220,10 +235,13 @@ function currentReportPage() {
   return navItems.find(([key]) => key === activePage)?.[2] || (activePage === "settings" ? "系統設定" : activePage);
 }
 
-function showToast(message) {
+function showToast(message, { assertive = false } = {}) {
   document.querySelector(".toast")?.remove();
   const node = document.createElement("div");
   node.className = "toast";
+  node.setAttribute("role", assertive ? "alert" : "status");
+  node.setAttribute("aria-live", assertive ? "assertive" : "polite");
+  node.setAttribute("aria-atomic", "true");
   node.textContent = message;
   document.body.append(node);
   clearTimeout(toastTimer);
@@ -261,7 +279,7 @@ function render() {
         </nav>
         <button class="sidebar-support-link" type="button" data-open-error-report aria-label="回報系統錯誤"><span>!</span>錯誤回報</button>
         <div class="sidebar-foot">
-          <div class="sidebar-meta">規則版本：${escapeHtml(RULE_VERSION)}<br />
+          <div class="sidebar-meta">規則版本：${escapeHtml(friendlyRuleVersion(RULE_VERSION))}<br />
             現行國小鐘點：${formatMoney(state.config.hourlyRate)} 元<br />
             個案資料：${state.meta?.storageMode === "drive" && cloudUi.connected ? "個人 Google Drive" : "瀏覽器本機快取"}</div>
           <div class="sidebar-copyright"><strong>© 2026 江志宏</strong><span>學校鐘點代課費核算平台</span><span>系統版本 ${escapeHtml(APP_VERSION)}</span><a href="mailto:${escapeHtml(SUPPORT_EMAIL)}">${escapeHtml(SUPPORT_EMAIL)}</a></div>
@@ -352,16 +370,18 @@ function pageHeading(eyebrow, title, lead, action = "") {
 }
 
 function renderDashboard() {
-  const cases = state.cases;
+  const month = sessionStorage.getItem("selected-dashboard-month") || todayMonth();
+  const cases = casesForOverview(state.cases, month);
+  const heading = month === todayMonth() ? "本月課務總覽" : `${month} 課務總覽`;
   const periodCount = cases.reduce((sum, item) => sum + (item.affectedPeriods?.length || 0), 0);
   const calculated = cases.flatMap((item) => item.calculation?.feeItems || []);
   const totals = caseTotals(calculated);
   const pending = cases.filter((item) => item.status !== "ready" && item.status !== "closed").length;
   return `
-    ${pageHeading("", "本月課務總覽", "快速查看請假案件、代課節次、待處理事項與鐘點費試算結果。", `
-      <div class="button-row"><button class="btn btn-secondary" data-go="settings">學期初設定</button><button class="btn btn-secondary" id="load-demo" ${cloudUi.connected ? "disabled" : ""}>載入示範資料</button><button class="btn btn-primary" data-go="case">新增請假案件</button></div>`)}
+    ${pageHeading("", heading, "快速查看請假案件、代課節次、待處理事項與鐘點費試算結果。", `
+      <div class="dashboard-heading-actions"><div class="field"><label for="dashboard-month">查看月份</label><input id="dashboard-month" type="month" value="${escapeHtml(month)}" /></div><div class="button-row"><button class="btn btn-secondary" data-go="settings">學期初設定</button><button class="btn btn-secondary" id="load-demo" ${cloudUi.connected ? "disabled" : ""}>載入示範資料</button><button class="btn btn-primary" data-go="case">新增請假案件</button></div></div>`)}
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-label">請假案件</div><div class="stat-value">${cases.length}</div><div class="stat-note">目前資料檔</div></div>
+      <div class="stat-card"><div class="stat-label">請假案件</div><div class="stat-value">${cases.length}</div><div class="stat-note">所選月份</div></div>
       <div class="stat-card"><div class="stat-label">受影響節次</div><div class="stat-value">${periodCount}</div><div class="stat-note">含調補課與代課</div></div>
       <div class="stat-card"><div class="stat-label">待處理案件</div><div class="stat-value">${pending}</div><div class="stat-note">尚未達可月結</div></div>
       <div class="stat-card"><div class="stat-label">已試算金額</div><div class="stat-value">${formatMoney(totals.total)}</div><div class="stat-note">公費 ${formatMoney(totals.public)}／自費 ${formatMoney(totals.self)}</div></div>
@@ -375,7 +395,7 @@ function renderDashboard() {
     <div class="grid-2">
       <div class="card">
         <div class="card-header"><div><h2>最近案件</h2><p>首頁只顯示日期、節次與合計；完整資料請開啟案件查看。</p></div><button class="link-button" data-go="cases">查看全部${cases.length ? `（${cases.length}）` : ""}</button></div>
-        ${renderRecentCaseRows(cases.slice(-3).reverse())}
+        ${renderRecentCaseRows(cases.slice(-3).reverse(), "所選月份尚無案件。")}
       </div>
       <div class="card">
         <h2>試算注意事項</h2>
@@ -386,8 +406,8 @@ function renderDashboard() {
     </div>`;
 }
 
-function renderRecentCaseRows(cases) {
-  if (!cases.length) return '<div class="empty">目前沒有案件。可先載入示範資料或新增請假案件。</div>';
+function renderRecentCaseRows(cases, emptyText = "目前沒有案件。可先載入示範資料或新增請假案件。") {
+  if (!cases.length) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
   return `<div class="recent-case-list">${cases.map((item) => {
     const totals = caseTotals(item.calculation?.feeItems || []);
     const [status, cls] = statusMeta(item.status);
@@ -404,13 +424,17 @@ function renderRecentCaseRows(cases) {
 
 function renderRoster() {
   const rosterFilter = sessionStorage.getItem("roster-substitute-filter") || "all";
+  const rosterQuery = sessionStorage.getItem("roster-search") || "";
+  const normalizedQuery = rosterQuery.trim().toLocaleLowerCase("zh-TW");
   const matchesFilter = (person) => rosterFilter === "all"
     || (rosterFilter === "available" && person.canSubstitute)
     || (rosterFilter === "paused" && !person.canSubstitute);
+  const matchesSearch = (person) => !normalizedQuery || [person.name, person.code, person.className, person.subjects, roleText(person)]
+    .some((value) => String(value || "").toLocaleLowerCase("zh-TW").includes(normalizedQuery));
   const allStaffPeople = state.people.filter((person) => person.personType === "staff");
   const allShortSubs = state.people.filter(isShortSub);
-  const staffPeople = allStaffPeople.filter(matchesFilter);
-  const shortSubs = allShortSubs.filter(matchesFilter);
+  const staffPeople = allStaffPeople.filter((person) => matchesFilter(person) && matchesSearch(person));
+  const shortSubs = allShortSubs.filter((person) => matchesFilter(person) && matchesSearch(person));
   const statusSelect = (person) => `<select class="roster-status-select" data-substitute-status="${person.id}" aria-label="${escapeHtml(person.name)}的排代狀態">${option("available", "可代課", person.canSubstitute ? "available" : "paused")}${option("paused", "暫不排代", person.canSubstitute ? "available" : "paused")}</select>`;
   const personRow = (person, isStaff) => `<div class="roster-person-row" role="listitem">
     <div class="roster-person-main">
@@ -421,7 +445,7 @@ function renderRoster() {
     <button class="btn btn-danger btn-small" data-delete-person="${person.id}">移除</button>
   </div>`;
   return `
-    ${pageHeading("", "教師與代課教師名單", "校內教師與短期代課教師分開維護；排代狀態會直接控制請假案件中的代課者名單。", `<div class="field roster-filter"><label for="roster-substitute-filter">快速篩選</label><select id="roster-substitute-filter">${option("all", "全部人員", rosterFilter)}${option("available", "只看可代課", rosterFilter)}${option("paused", "只看暫不排代", rosterFilter)}</select></div>`)}
+    ${pageHeading("", "教師與代課教師名單", "校內教師與短期代課教師分開維護；排代狀態會直接控制請假案件中的代課者名單。", `<form id="roster-filter-form" class="filter-toolbar roster-filter"><div class="field"><label for="roster-search">搜尋人員</label><input id="roster-search" name="query" type="search" value="${escapeHtml(rosterQuery)}" placeholder="姓名、班級或科目" /></div><div class="field"><label for="roster-substitute-filter">排代狀態</label><select id="roster-substitute-filter" name="status">${option("all", "全部人員", rosterFilter)}${option("available", "只看可代課", rosterFilter)}${option("paused", "只看暫不排代", rosterFilter)}</select></div><button class="btn btn-secondary" type="submit">搜尋</button>${rosterQuery || rosterFilter !== "all" ? '<button class="link-button" id="clear-roster-filter" type="button">清除</button>' : ""}</form>`)}
     <div class="roster-grid">
       <div class="card">
         <div class="card-header"><div><h2>校內教師名冊</h2><p>包含導師、科任及兼行政教師；排代狀態可直接調整。</p></div></div>
@@ -475,7 +499,10 @@ function newCaseDraft() {
 }
 
 function renderCaseEditor() {
-  if (!draftCase) draftCase = newCaseDraft();
+  if (!draftCase) {
+    draftCase = newCaseDraft();
+    rememberDraftBaseline();
+  }
   const c = draftCase;
   const editingExisting = state.cases.some((item) => item.id === c.id);
   const staff = state.people.filter((person) => person.personType === "staff");
@@ -513,18 +540,18 @@ function renderCaseEditor() {
         <div class="card-header"><div><h2>2. 受影響節次與排代</h2><p>有課才派；調課、補課及長期代理涵蓋不產生逐節代課費。</p></div><button class="btn btn-secondary btn-small" type="button" id="add-period">新增節次</button></div>
         <div class="table-wrap">
           <table><thead><tr><th>日期</th><th>節次</th><th>班級</th><th>科目</th><th>處理方式</th><th>代課者</th><th>經費來源</th><th>56 小時區段</th><th>超鐘點</th><th></th></tr></thead>
-          <tbody>${c.affectedPeriods.length ? c.affectedPeriods.map((period) => `
+          <tbody>${c.affectedPeriods.length ? c.affectedPeriods.map((period, index) => `
             <tr data-period-row="${period.id}">
-              <td><input data-key="date" type="date" value="${escapeHtml(period.date || c.startDate)}" /></td>
-              <td><input data-key="periodNo" type="number" min="1" max="12" value="${period.periodNo || 1}" /></td>
-              <td><input data-key="className" value="${escapeHtml(period.className || "")}" /></td>
-              <td><select data-key="subject" aria-label="科目"><option value="">請選擇</option>${subjectOptions(period.subject || "")}</select></td>
-              <td><select data-key="handling">${HANDLING_TYPES.map((item) => option(item.value, item.label, period.handling)).join("")}</select></td>
-              <td><select data-key="substituteId"><option value="">未指定</option>${substituteOptions(period.substituteId, c.teacherId)}</select></td>
-              <td><select data-key="fundSourceId" aria-label="經費來源"><option value="">依規則判斷</option>${fundSourceOptions(period.fundSourceId)}</select></td>
-              <td><select data-key="thresholdZone"><option value="">不適用／未選</option>${option("within", "門檻內", period.thresholdZone)}${option("over", "超過門檻", period.thresholdZone)}</select></td>
-              <td><input data-key="isOvertime" type="checkbox" ${period.isOvertime ? "checked" : ""} /></td>
-              <td><button class="btn btn-danger btn-small" type="button" data-delete-period="${period.id}">移除</button></td>
+              <td><input data-key="date" aria-label="第 ${index + 1} 筆節次日期" type="date" value="${escapeHtml(period.date || c.startDate)}" /></td>
+              <td><input data-key="periodNo" aria-label="第 ${index + 1} 筆節次" type="number" min="1" max="12" value="${period.periodNo || 1}" /></td>
+              <td><input data-key="className" aria-label="第 ${index + 1} 筆班級" value="${escapeHtml(period.className || "")}" /></td>
+              <td><select data-key="subject" aria-label="第 ${index + 1} 筆科目"><option value="">請選擇</option>${subjectOptions(period.subject || "")}</select></td>
+              <td><select data-key="handling" aria-label="第 ${index + 1} 筆處理方式">${HANDLING_TYPES.map((item) => option(item.value, item.label, period.handling)).join("")}</select></td>
+              <td><select data-key="substituteId" aria-label="第 ${index + 1} 筆代課者"><option value="">未指定</option>${substituteOptions(period.substituteId, c.teacherId)}</select></td>
+              <td><select data-key="fundSourceId" aria-label="第 ${index + 1} 筆經費來源"><option value="">依規則判斷</option>${fundSourceOptions(period.fundSourceId)}</select></td>
+              <td><select data-key="thresholdZone" aria-label="第 ${index + 1} 筆 56 小時區段"><option value="">不適用／未選</option>${option("within", "門檻內", period.thresholdZone)}${option("over", "超過門檻", period.thresholdZone)}</select></td>
+              <td><input data-key="isOvertime" aria-label="第 ${index + 1} 筆是否為超鐘點" type="checkbox" ${period.isOvertime ? "checked" : ""} /></td>
+              <td><button class="btn btn-danger btn-small" type="button" data-delete-period="${period.id}" aria-label="移除第 ${index + 1} 筆節次">移除</button></td>
             </tr>`).join("") : `<tr><td colspan="10" class="empty">尚未加入受影響節次。</td></tr>`}</tbody></table>
         </div>
       </div>
@@ -557,7 +584,7 @@ function renderCalculation(c) {
   const manualTrigger = c.hasHomeroomDuty && proxy?.roles?.includes("subject") && !proxy?.roles?.includes("homeroom") && !proxy?.roles?.includes("admin");
   return `
     <div class="card" id="calculation-results">
-      <div class="card-header"><div><h2>4. 規則判斷與費用項目</h2><p>規則 ${calc.versions.rules}／金額 ${calc.versions.rates}／AR ${calc.versions.reasons}</p></div><button class="btn btn-primary" id="mark-ready">完成覆核，標記可月結</button></div>
+      <div class="card-header"><div><h2>4. 規則判斷與費用項目</h2><p title="完整規則版本：${escapeHtml(calc.versions.rules)}">規則版本 ${escapeHtml(friendlyRuleVersion(calc.versions.rules))}／金額 ${escapeHtml(calc.versions.rates)}／認定理由 ${escapeHtml(calc.versions.reasons)}</p></div><button class="btn btn-primary" id="mark-ready" ${c.status === "ready" ? "disabled" : ""}>${c.status === "ready" ? "已完成覆核・可月結" : "完成覆核，標記可月結"}</button></div>
       ${calc.errors.length ? `<div class="notice danger"><strong>尚有 ${calc.errors.length} 項需處理：</strong><br />${calc.errors.map(escapeHtml).join("<br />")}</div>` : '<div class="notice">規則判斷已完成；請確認公費分攤是否平衡。</div>'}
       ${(calc.warnings || []).length ? `<div class="notice warning"><strong>計算提醒：</strong><br />${calc.warnings.map(escapeHtml).join("<br />")}</div>` : ""}
       ${manualTrigger ? `<div class="notice warning"><strong>請人工計算代理導師鐘點費</strong><br />代理人 ${escapeHtml(proxy.name)} 為科任教師，請由承辦人另依規定人工計算。如需併入本案，可在計算完成後手動新增。<div class="button-row" style="margin-top:10px"><button class="btn btn-secondary btn-small" id="open-manual-fee">手動新增計算結果</button></div></div>` : ""}
@@ -592,11 +619,27 @@ function renderAllocationBox(c, fee) {
 }
 
 function renderCases() {
+  const selectedMonth = sessionStorage.getItem("case-list-month") || "all";
+  const selectedStatus = sessionStorage.getItem("case-list-status") || "all";
+  const query = sessionStorage.getItem("case-list-search") || "";
+  const months = availableCaseMonths(state.cases);
+  const cases = filterCaseList([...state.cases].reverse(), {
+    month: selectedMonth,
+    status: selectedStatus,
+    query,
+    searchText: (item) => `${personName(item.teacherId)} ${roleText(personById(item.teacherId))} ${leaveLabel(item.leaveType)} ${item.id} ${item.startDate || ""}`,
+  });
   return `
     ${pageHeading("", "代課費核算", "查看每筆請假案件的排代、試算與費用分攤結果。", `<button class="btn btn-primary" data-go="case">新增請假案件</button>`)}
     <div class="card">
-      <div class="card-header"><div><h2>全部案件</h2><p>已月結案件不可直接修改；如需更正，請先到「月結與報表」解鎖。</p></div><span class="badge none">${state.cases.length} 案</span></div>
-      ${renderCaseRows([...state.cases].reverse(), true)}
+      <div class="card-header"><div><h2>案件清單</h2><p>已月結案件不可直接修改；如需更正，請先到「月結與報表」解鎖。</p></div><span class="badge none">${cases.length}${cases.length !== state.cases.length ? `／${state.cases.length}` : ""} 案</span></div>
+      <form id="case-filter-form" class="filter-toolbar case-filter-toolbar">
+        <div class="field"><label for="case-list-search">搜尋</label><input id="case-list-search" name="query" type="search" value="${escapeHtml(query)}" placeholder="教師、假別或案件編號" /></div>
+        <div class="field"><label for="case-list-month">月份</label><select id="case-list-month" name="month"><option value="all">全部月份</option>${months.map((month) => option(month, month, selectedMonth)).join("")}</select></div>
+        <div class="field"><label for="case-list-status">狀態</label><select id="case-list-status" name="status">${option("all", "全部狀態", selectedStatus)}${option("pending", "待處理", selectedStatus)}${option("ready", "可月結", selectedStatus)}${option("closed", "已月結", selectedStatus)}</select></div>
+        <button class="btn btn-secondary" type="submit">搜尋</button>${query || selectedMonth !== "all" || selectedStatus !== "all" ? '<button class="link-button" id="clear-case-filter" type="button">清除</button>' : ""}
+      </form>
+      ${renderCaseRows(cases, true)}
     </div>`;
 }
 
@@ -668,7 +711,7 @@ function renderCaseRows(cases, showDelete = false) {
   return `<div class="case-list">${cases.map((item) => {
     const totals = caseTotals(item.calculation?.feeItems || []);
     const [status, cls] = statusMeta(item.status);
-    return `<div class="case-row ${showDelete ? "" : "compact"}"><div><strong>${escapeHtml(personName(item.teacherId))}・${escapeHtml(leaveLabel(item.leaveType))}</strong>${showDelete ? `<small>${escapeHtml(item.id)}｜${escapeHtml(item.startDate || "未定日期")}</small>` : `<small>${escapeHtml(item.id)}</small><small>${escapeHtml(item.startDate || "未定日期")}</small><span class="badge ${cls}">${status}</span>`}</div><div><small>節次</small><strong>${item.affectedPeriods?.length || 0}</strong></div><div><small>公費</small><strong>${formatMoney(totals.public)}</strong></div><div><small>自費</small><strong>${formatMoney(totals.self)}</strong></div>${showDelete ? `<div><span class="badge ${cls}">${status}</span></div>` : ""}<div class="button-row"><button class="btn btn-secondary btn-small" data-edit-case="${item.id}">開啟</button>${showDelete ? `<button class="btn btn-danger btn-small" data-delete-case="${item.id}">刪除</button>` : ""}</div></div>`;
+    return `<div class="case-row ${showDelete ? "" : "compact"}"><div><strong>${escapeHtml(personName(item.teacherId))}・${escapeHtml(roleText(personById(item.teacherId)))}・${escapeHtml(leaveLabel(item.leaveType))}</strong>${showDelete ? `<small>${escapeHtml(item.id)}｜${escapeHtml(item.startDate || "未定日期")}</small>` : `<small>${escapeHtml(item.id)}</small><small>${escapeHtml(item.startDate || "未定日期")}</small><span class="badge ${cls}">${status}</span>`}</div><div><small>節次</small><strong>${item.affectedPeriods?.length || 0}</strong></div><div><small>公費</small><strong>${formatMoney(totals.public)}</strong></div><div><small>自費</small><strong>${formatMoney(totals.self)}</strong></div>${showDelete ? `<div><span class="badge ${cls}">${status}</span></div>` : ""}<div class="button-row"><button class="btn btn-secondary btn-small" data-edit-case="${item.id}">開啟</button>${showDelete ? `<button class="btn btn-danger btn-small" data-delete-case="${item.id}">刪除</button>` : ""}</div></div>`;
   }).join("")}</div>`;
 }
 
@@ -699,7 +742,9 @@ function renderMonthly() {
     ${pageHeading("", "月結與報表", "依實際代課發生日歸屬月份，可列印月結報表或下載本月費用明細。", `<div class="field" style="min-width:180px"><label for="month-picker">核算月份</label><input id="month-picker" type="month" value="${month}" /></div>`)}
     ${monthClose
       ? `<div class="notice"><strong>${escapeHtml(month)} 已完成月結並鎖定</strong><br />鎖定時間：${escapeHtml(formatDateTime(monthClose.closedAt))}。鎖定案件不可修改或刪除；如需更正，請先解鎖。</div>`
-      : data.pending.length
+      : !data.relevantCases.length
+        ? '<div class="notice">本月尚無案件。</div>'
+        : data.pending.length
         ? `<div class="notice danger">本月仍有 ${data.pending.length} 案尚未完成覆核：${data.pending.map((item) => escapeHtml(item.id)).join("、")}</div>`
         : '<div class="notice">本月案件均已完成覆核，可列印、匯出或完成月結鎖定。</div>'}
     <div class="stats-grid">
@@ -741,7 +786,7 @@ function renderAdminAccountsCard() {
       return `<tr><td><strong>${escapeHtml(account.name || account.email)}</strong><small>${escapeHtml(account.email)}</small></td><td>${escapeHtml(account.hosted_domain || (protectedAccount ? "中央管理帳號" : "—"))}</td><td>${escapeHtml(formatDateTime(account.last_login_at))}</td><td><span class="badge ${enabled ? "ready" : "pending"}">${enabled ? "可登入" : "已停用"}</span></td><td>${protectedAccount ? '<span class="muted">受保護</span>' : `<button class="btn ${enabled ? "btn-danger" : "btn-primary"} btn-small" type="button" data-toggle-login-account="${escapeHtml(account.subject)}" data-next-enabled="${enabled ? "false" : "true"}">${enabled ? "停用登入" : "恢復登入"}</button>`}</td></tr>`;
     }).join("") || '<tr><td colspan="5" class="empty">尚無教育帳號登入紀錄。</td></tr>'}</tbody></table></div>`;
   }
-  return `<div class="card admin-account-card">
+  return `<div class="card admin-account-card settings-section" id="settings-admin">
     <div class="card-header"><div><h2>登入帳號管理</h2><p>教育帳號第一次登入後會出現在此處；不需事前核准，只管理需要停用的例外帳號。</p></div><button class="btn btn-secondary btn-small" type="button" id="refresh-admin-accounts" ${adminAccountUi.loading ? "disabled" : ""}>重新整理</button></div>
     <div class="notice warning"><strong>停用範圍：</strong>只阻擋此帳號進入本系統，不會刪除該帳號 Drive 內的資料。已登入者會在下次資格檢查（最遲約 5 分鐘）退出。</div>
     ${content}
@@ -753,8 +798,9 @@ function renderSettings() {
   const usingDrive = state.meta?.storageMode === "drive" && cloudUi.connected;
   return `
     ${pageHeading("", "系統設定", "每學期開始前，請先確認學校、學年度、鐘點單價、科目與經費來源。")} 
+    <nav class="settings-section-nav" aria-label="系統設定分類"><a href="#settings-basic">基本資料</a><a href="#settings-backup">備份存取</a><a href="#settings-access">帳號登入</a>${cloudUi.profile?.is_central_admin ? '<a href="#settings-admin">帳號管理</a>' : ""}<a href="#settings-subjects">科目</a><a href="#settings-funds">經費來源</a></nav>
     <div class="grid-2">
-      <div class="card">
+      <div class="card settings-section" id="settings-basic">
         <div class="card-header"><div><h2>學校基本資料與金額</h2><p>修改後，既有案件須重新試算才會套用。</p></div></div>
         <form id="settings-form"><div class="form-grid">
           <div class="field span-12"><label for="schoolName">學校名稱</label><input id="schoolName" name="schoolName" value="${escapeHtml(state.config.schoolName)}" /></div>
@@ -765,7 +811,7 @@ function renderSettings() {
           <div class="field span-6"><label for="roundingMode">導師職務加給小數處理</label><select id="roundingMode" name="roundingMode">${option("round", "元以下四捨五入（目前預設）", state.config.roundingMode)}${option("floor", "元以下無條件捨去", state.config.roundingMode)}${option("keep2", "保留小數 2 位", state.config.roundingMode)}</select><div class="help">此為可確認參數；正式送核前依校內作業方式確認。</div></div>
         </div><div class="button-row" style="margin-top:20px"><button class="btn btn-primary" type="submit">儲存設定</button></div></form>
       </div>
-      <div class="card">
+      <div class="card settings-section" id="settings-backup">
         <div class="card-header"><div><h2>資料存取與備份</h2><p>平常不必找檔案；登入後自動讀取，每次修改自動儲存。</p></div></div>
         <div class="storage-status"><span class="account-dot ${usingDrive ? "connected" : ""}"></span><div><strong>${usingDrive ? "目前使用個人 Google Drive 自動同步" : "目前使用本機自動儲存"}</strong><small>${savedTimeText()}${usingDrive ? "" : "；登入並連接後改存個人 Google Drive。"}</small></div></div>
         <div class="storage-flow" aria-label="資料存取流程">
@@ -779,7 +825,7 @@ function renderSettings() {
         <div class="button-row"><button class="btn btn-secondary" id="load-demo-settings" ${cloudUi.connected ? "disabled" : ""}>改用示範資料</button><button class="btn btn-danger" id="clear-data">清空本機資料</button></div>
       </div>
     </div>
-    <div class="card access-policy-card">
+    <div class="card access-policy-card settings-section" id="settings-access">
       <div class="card-header"><div><h2>帳號登入與中央管理</h2><p>教育網域帳號可直接登入；中央管理者可停用或恢復特定帳號，但不能讀取各校存在個人 Drive 的案件資料。</p></div><button class="btn btn-secondary" type="button" id="open-access-settings">查看登入說明</button></div>
       <div class="policy-grid">
         <div><strong>可直接登入</strong><span>縣市或學校核發、網域以 .edu.tw 結尾的 Google 教育帳號。</span></div>
@@ -788,12 +834,12 @@ function renderSettings() {
       </div>
     </div>
     ${renderAdminAccountsCard()}
-    <div class="card">
+    <div class="card settings-section" id="settings-subjects">
       <div class="card-header"><div><h2>科目基本資料</h2><p>排代明細會使用此清單作為科目下拉選單。</p></div></div>
       <form id="subject-form" class="subject-add-row"><div class="field"><label for="newSubject">新增科目</label><input id="newSubject" name="subject" maxlength="30" placeholder="例如：資訊、國樂團" required /></div><button class="btn btn-primary" type="submit">新增科目</button></form>
       <div class="subject-list">${state.subjects.map((subject) => `<span class="subject-chip"><span>${escapeHtml(subject)}</span><button type="button" data-delete-subject="${escapeHtml(subject)}" aria-label="移除${escapeHtml(subject)}">×</button></span>`).join("")}</div>
     </div>
-    <div class="card">
+    <div class="card settings-section" id="settings-funds">
       <div class="card-header"><div><h2>經費來源</h2><p>可新增公費、自費或其他來源；公費項目仍可在核算結果中複選分攤。</p></div><button class="btn btn-primary btn-small" type="button" id="open-fund-source">新增經費來源</button></div>
       <div class="notice">規則負責判斷公費或自費；此處的來源名稱供排代預選、分攤與月結統計使用，不代為認定經費是否合法支用。</div>
       <div class="table-wrap"><table><thead><tr><th>負擔類別</th><th>顯示名稱</th><th>狀態</th><th></th></tr></thead><tbody>${state.fundSources.map((source) => `<tr><td>${escapeHtml(fundSourceKindLabel(source.burdenType))}</td><td>${escapeHtml(source.name)}</td><td><select data-fund-source-status="${source.id}" aria-label="${escapeHtml(source.name)}狀態">${option("active", "啟用", source.active ? "active" : "paused")}${option("paused", "停用", source.active ? "active" : "paused")}</select></td><td>${source.custom ? `<button class="btn btn-danger btn-small" type="button" data-delete-fund-source="${source.id}">移除</button>` : '<span class="muted">內建</span>'}</td></tr>`).join("")}</tbody></table></div>
@@ -805,7 +851,7 @@ function renderModal() {
     return `<div class="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="error-report-title"><div class="dialog error-report-dialog"><div class="card-header"><div><h2 id="error-report-title">錯誤回報</h2><p>填寫問題說明並選取截圖，再傳送給開發者。</p></div><button class="btn btn-secondary btn-small" data-close-modal>關閉</button></div>
       <div class="notice warning"><strong>傳送前請先檢查：</strong>說明與截圖不得包含身分證、金融帳號、教師請假原因或其他敏感個資。</div>
       <form id="error-report-form"><div class="form-grid">
-        <div class="field span-12"><label for="reportDescription">問題說明</label><textarea id="reportDescription" name="description" rows="4" maxlength="1200" placeholder="請說明原本想完成什麼，以及畫面發生什麼問題。" required></textarea></div>
+        <div class="field span-12"><label for="reportDescription">問題說明</label><textarea id="reportDescription" name="description" rows="4" maxlength="1200" placeholder="請說明原本想完成什麼，以及畫面發生什麼問題。" required autofocus></textarea></div>
         <div class="field span-12"><label for="reportSteps">操作步驟</label><textarea id="reportSteps" name="steps" rows="3" maxlength="1200" placeholder="例如：進入代課費核算 → 開啟案件 → 按下重新試算。"></textarea></div>
         <div class="field span-12"><label for="reportScreenshot">畫面截圖（建議，最大 5 MB）</label><input id="reportScreenshot" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" /><div id="report-file-preview" class="report-file-preview"><span>尚未選取截圖</span></div></div>
         <div class="field span-12"><label class="check-row privacy-confirm"><input type="checkbox" name="privacyConfirmed" required />我已確認說明與截圖不含敏感個資。</label></div>
@@ -914,6 +960,37 @@ function bindCommonEvents() {
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", () => { modal = null; render(); }));
   document.querySelector("#open-access")?.addEventListener("click", () => { modal = "access"; render(); });
   bindErrorReportTriggers();
+  bindActiveDialogAccessibility();
+}
+
+function bindActiveDialogAccessibility() {
+  const dialog = document.querySelector('[role="dialog"]');
+  if (!dialog) return;
+  const focusableElements = () => [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => element.offsetParent !== null);
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      if (!dialog.querySelector("[data-close-modal]")) return;
+      event.preventDefault();
+      modal = null;
+      render();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const elements = focusableElements();
+    if (!elements.length) return;
+    const first = elements[0];
+    const last = elements.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  const preferred = dialog.querySelector("[autofocus]") || focusableElements()[0];
+  queueMicrotask(() => preferred?.focus());
 }
 
 function bindErrorReportTriggers() {
@@ -925,8 +1002,12 @@ function bindErrorReportTriggers() {
 
 function navigate(page) {
   const wasEditingExisting = isEditingExistingCase();
-  if (activePage === "case") syncDraftFromForm();
-  if (page === "case" && (activePage !== "case" || wasEditingExisting)) draftCase = null;
+  if (activePage === "case" && draftCase) {
+    syncDraftFromForm();
+    const leavesCurrentDraft = page !== "case" || wasEditingExisting;
+    if (leavesCurrentDraft && hasUnsavedDraft() && !confirm("目前案件尚未儲存。\n\n確定放棄這次變更並離開？")) return;
+  }
+  if (page === "case" && (activePage !== "case" || wasEditingExisting)) clearDraftCase();
   activePage = page;
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1065,6 +1146,10 @@ function bindDriveChoiceModal() {
 }
 
 function bindDashboardEvents() {
+  document.querySelector("#dashboard-month")?.addEventListener("change", (event) => {
+    sessionStorage.setItem("selected-dashboard-month", event.target.value || todayMonth());
+    render();
+  });
   document.querySelector("#load-demo")?.addEventListener("click", loadDemo);
   document.querySelectorAll("[data-edit-case]").forEach((button) => button.addEventListener("click", () => openCase(button.dataset.editCase)));
 }
@@ -1074,12 +1159,24 @@ function loadDemo() {
   if (!confirm("載入示範資料會取代目前瀏覽器內的名冊、設定與案件。建議先匯出完整備份。\n\n確定繼續？")) return;
   state = demoState();
   saveState("load-demo", "system");
-  draftCase = null;
+  clearDraftCase();
   showToast("已載入示範資料");
   render();
 }
 
 function bindRosterEvents() {
+  document.querySelector("#roster-filter-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    sessionStorage.setItem("roster-search", String(data.get("query") || "").trim());
+    sessionStorage.setItem("roster-substitute-filter", String(data.get("status") || "all"));
+    render();
+  });
+  document.querySelector("#clear-roster-filter")?.addEventListener("click", () => {
+    sessionStorage.removeItem("roster-search");
+    sessionStorage.setItem("roster-substitute-filter", "all");
+    render();
+  });
   document.querySelector("#roster-substitute-filter")?.addEventListener("change", (event) => {
     sessionStorage.setItem("roster-substitute-filter", event.target.value);
     render();
@@ -1288,12 +1385,31 @@ function validateDraft() {
   return errors;
 }
 
+function showDraftValidationError(message) {
+  const text = String(message || "").trim();
+  let target = null;
+  if (text.includes("請假教師")) target = document.querySelector("#teacherId");
+  else if (text.includes("起訖日期") || text.includes("結束時間必須晚於")) target = document.querySelector("#startDate");
+  else if (text.includes("起訖時間")) target = document.querySelector("#startTime");
+  else if (text.includes("至少新增")) target = document.querySelector("#add-period");
+  else if (text.includes("公假")) target = document.querySelector("#officialReason");
+  else if (text.includes("導師職務代理")) target = document.querySelector("#homeroomProxyId") || document.querySelector("#hasHomeroomDuty");
+  const periodMatch = text.match(/第\s*(\d+)\s*節/);
+  if (periodMatch) {
+    const row = [...document.querySelectorAll("[data-period-row]")].find((item) => Number(item.querySelector('[data-key="periodNo"]')?.value) === Number(periodMatch[1]));
+    target = row?.querySelector(text.includes("班級") ? '[data-key="className"]' : '[data-key="substituteId"]') || target;
+  }
+  showToast(text, { assertive: true });
+  requestAnimationFrame(() => target?.focus());
+}
+
 function persistDraftInState() {
   draftCase.updatedAt = new Date().toISOString();
   const index = state.cases.findIndex((item) => item.id === draftCase.id);
   if (index >= 0) state.cases[index] = structuredClone(draftCase);
   else state.cases.push(structuredClone(draftCase));
   saveState("save-case", draftCase.id);
+  rememberDraftBaseline();
 }
 
 function ensureDraftCaseNumber() {
@@ -1304,10 +1420,10 @@ function ensureDraftCaseNumber() {
 function saveDraft(navigateAfter = true) {
   syncDraftFromForm();
   const errors = validateDraft();
-  if (errors.length) return showToast(errors[0]);
+  if (errors.length) return showDraftValidationError(errors[0]);
   ensureDraftCaseNumber();
   persistDraftInState();
-  if (navigateAfter) { activePage = "cases"; draftCase = null; }
+  if (navigateAfter) { activePage = "cases"; clearDraftCase(); }
   render();
   showToast("案件草稿已儲存");
 }
@@ -1315,7 +1431,7 @@ function saveDraft(navigateAfter = true) {
 function calculateDraft() {
   syncDraftFromForm();
   const errors = validateDraft();
-  if (errors.length) return showToast(errors[0]);
+  if (errors.length) return showDraftValidationError(errors[0]);
   ensureDraftCaseNumber();
   const result = calculateCase(draftCase, state.config);
   draftCase.calculation = result;
@@ -1337,9 +1453,9 @@ function markReady() {
   syncDraftFromForm();
   if (!draftCase.calculation) {
     render();
-    return showToast("案件內容已變更，舊試算已失效，請重新執行試算");
+    return showToast("案件內容已變更，舊試算已失效，請重新執行試算", { assertive: true });
   }
-  if (draftCase.calculation.errors.length) return showToast("仍有規則或排代錯誤，尚不能標記可月結");
+  if (draftCase.calculation.errors.length) return showToast("仍有規則或排代錯誤，尚不能標記可月結", { assertive: true });
   for (const fee of draftCase.calculation.feeItems.filter((item) => item.burden === BURDEN.PUBLIC)) {
     if (allocationBalance(fee, allocationRowsFor(draftCase, fee.id)) !== 0) return showToast(`「${fee.ruleTitle}」的公費分攤尚未平衡`);
   }
@@ -1379,6 +1495,20 @@ function bindManualFeeModal() {
 }
 
 function bindCasesEvents() {
+  document.querySelector("#case-filter-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    sessionStorage.setItem("case-list-search", String(data.get("query") || "").trim());
+    sessionStorage.setItem("case-list-month", String(data.get("month") || "all"));
+    sessionStorage.setItem("case-list-status", String(data.get("status") || "all"));
+    render();
+  });
+  document.querySelector("#clear-case-filter")?.addEventListener("click", () => {
+    sessionStorage.removeItem("case-list-search");
+    sessionStorage.setItem("case-list-month", "all");
+    sessionStorage.setItem("case-list-status", "all");
+    render();
+  });
   document.querySelectorAll("[data-edit-case]").forEach((button) => button.addEventListener("click", () => openCase(button.dataset.editCase)));
   document.querySelectorAll("[data-delete-case]").forEach((button) => button.addEventListener("click", () => {
     const id = button.dataset.deleteCase;
@@ -1396,6 +1526,7 @@ function openCase(id) {
   if (!target) return showToast("找不到案件");
   if (target.status === "closed" || lockedMonthsForCase(target, state.monthlyCloses).length) return showToast("已月結案件不可直接修改；請先到月結頁解鎖");
   draftCase = structuredClone(target);
+  rememberDraftBaseline();
   activePage = "case";
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1555,7 +1686,7 @@ async function importFullBackup(input) {
     state = importedState;
     committed = true;
     googleCloud.queueSave(state);
-    draftCase = null;
+    clearDraftCase();
     activePage = "dashboard";
     render();
     showToast("完整備份已匯入並自動儲存");
@@ -1685,7 +1816,7 @@ function bindSettingsEvents() {
     state = emptyState();
     localStorageAdapter.reset();
     localStorageAdapter.save(state);
-    draftCase = null;
+    clearDraftCase();
     render();
     showToast("全部本機資料已清空");
   });
@@ -1717,6 +1848,13 @@ function bindFundSourceModal() {
     showToast("經費來源已建立");
   });
 }
+
+window.addEventListener("beforeunload", (event) => {
+  if (activePage === "case" && document.querySelector("#case-form")) syncDraftFromForm();
+  if (!hasUnsavedDraft()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 render();
 googleCloud.initialize();
