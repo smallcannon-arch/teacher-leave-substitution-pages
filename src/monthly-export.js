@@ -1,4 +1,4 @@
-import { burdenLabel, leaveLabel } from "./rules.js?v=0.4.5";
+import { burdenLabel, leaveLabel } from "./rules.js?v=0.4.6";
 
 export const MONTHLY_EXPORT_HEADERS = [
   "核算月份",

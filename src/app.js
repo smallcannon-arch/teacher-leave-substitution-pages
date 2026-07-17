@@ -6,28 +6,28 @@ import {
   REASON_CODES,
   burdenLabel,
   leaveLabel,
-} from "./rules.js?v=0.4.5";
+} from "./rules.js?v=0.4.6";
 import {
   allocationBalance,
   calculateCase,
   caseTotals,
   RULE_VERSION,
   roundMoney,
-} from "./calculator.js?v=0.4.5";
-import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.5";
-import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.5";
-import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.5";
-import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.5";
-import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.5";
-import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.5";
-import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.5";
-import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.5";
-import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.5";
-import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.5";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.5";
-import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.5";
-import { GoogleCloudService } from "./google-cloud.js?v=0.4.5";
-import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.5";
+} from "./calculator.js?v=0.4.6";
+import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.6";
+import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.6";
+import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.6";
+import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.6";
+import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.6";
+import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.6";
+import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.6";
+import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.6";
+import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.6";
+import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.6";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.6";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.6";
+import { GoogleCloudService } from "./google-cloud.js?v=0.4.6";
+import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.6";
 
 const app = document.querySelector("#app");
 let state = localStorageAdapter.load();
@@ -286,6 +286,11 @@ function render() {
           <strong>系統設定</strong>
           <small>學校、單價、科目與經費來源</small>
         </button>
+        ${cloudUi.profile?.is_central_admin ? `<button class="admin-shortcut ${activePage === "settings" ? "active" : ""}" data-nav="settings" data-nav-target="settings-admin">
+          <span>中央管理者</span>
+          <strong>登入帳號管理</strong>
+          <small>查看使用帳號、學校名稱與登入狀態</small>
+        </button>` : ""}
         <div class="nav-group-label">工作區</div>
         <nav>
           ${navItems.map(([key, icon, label]) => `
@@ -977,7 +982,7 @@ function renderModal() {
 }
 
 function bindCommonEvents() {
-  document.querySelectorAll("[data-nav]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.nav)));
+  document.querySelectorAll("[data-nav]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.nav, button.dataset.navTarget)));
   document.querySelectorAll("[data-go]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.go)));
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", () => { modal = null; render(); }));
   document.querySelector("#open-access")?.addEventListener("click", () => { modal = "access"; render(); });
@@ -1023,7 +1028,7 @@ function bindErrorReportTriggers() {
   }));
 }
 
-function navigate(page) {
+function navigate(page, targetId = "") {
   const wasEditingExisting = isEditingExistingCase();
   if (activePage === "case" && draftCase) {
     syncDraftFromForm();
@@ -1033,7 +1038,11 @@ function navigate(page) {
   if (page === "case" && (activePage !== "case" || wasEditingExisting)) clearDraftCase();
   activePage = page;
   render();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (targetId) {
+    queueMicrotask(() => document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  } else {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 }
 
 function bindPageEvents() {

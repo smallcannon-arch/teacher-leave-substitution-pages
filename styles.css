@@ -141,6 +141,42 @@ button {
   line-height: 1.45;
 }
 
+.admin-shortcut {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(110, 211, 200, 0.58);
+  border-radius: 12px;
+  color: #fff;
+  background: rgba(21, 132, 123, 0.24);
+  text-align: left;
+}
+
+.admin-shortcut:hover,
+.admin-shortcut.active {
+  border-color: #83ddd3;
+  background: rgba(21, 132, 123, 0.4);
+}
+
+.admin-shortcut span {
+  color: #9fe8e0;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.admin-shortcut strong {
+  font-size: 17px;
+}
+
+.admin-shortcut small {
+  color: #d7e2e7;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .nav-group-label {
   padding: 10px 10px 5px;
   color: #829baa;
@@ -2318,12 +2354,14 @@ td select {
     display: none;
   }
 
-  .setup-shortcut {
+  .setup-shortcut,
+  .admin-shortcut {
     margin-bottom: 8px;
     padding: 8px 12px;
   }
 
-  .setup-shortcut small {
+  .setup-shortcut small,
+  .admin-shortcut small {
     display: none;
   }
 

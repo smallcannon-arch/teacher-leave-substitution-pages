@@ -1,4 +1,4 @@
-import { createBackup, parseBackup } from "./backup.js?v=0.4.5";
+import { createBackup, parseBackup } from "./backup.js?v=0.4.6";
 
 const DRIVE_FILE_NAME = "substitute-fee-desk-data-v1.json";
 const DEFAULT_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";

@@ -1,4 +1,4 @@
-import { caseServiceMonths } from "./monthly-close.js?v=0.4.5";
+import { caseServiceMonths } from "./monthly-close.js?v=0.4.6";
 
 function normalizedFingerprintValue(value, key = "") {
   if (key === "updatedAt") return undefined;
