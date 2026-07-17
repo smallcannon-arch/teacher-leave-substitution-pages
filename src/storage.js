@@ -1,4 +1,4 @@
-import { RULE_VERSION } from "./calculator.js?v=0.4.3";
+import { RULE_VERSION } from "./calculator.js?v=0.4.5";
 
 const STORAGE_KEY = "hsinchu-substitute-fee-desk-v01";
 const LEGACY_DEMO_CASE_ID = "C-DEMO-001";

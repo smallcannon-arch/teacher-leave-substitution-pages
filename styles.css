@@ -289,6 +289,21 @@ button {
   background: #eef8f6;
 }
 
+.sign-out-button {
+  border-color: #e3aaa5;
+  color: #a53b33;
+  background: #fff8f7;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.sign-out-button:hover,
+.sign-out-button:focus-visible {
+  border-color: #c55a50;
+  color: #842a23;
+  background: #fff0ee;
+}
+
 .report-mark {
   display: grid;
   width: 19px;
@@ -301,7 +316,9 @@ button {
   font-weight: 900;
 }
 
-.sidebar-support-link {
+.sidebar-quick-actions,
+.sidebar-support-link,
+.sidebar-sign-out-button {
   display: none;
 }
 
@@ -2315,12 +2332,21 @@ td select {
     min-width: max-content;
   }
 
-  .sidebar-support-link {
+  .sidebar-quick-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 7px;
+    margin-top: 10px;
+  }
+
+  .sidebar-support-link,
+  .sidebar-sign-out-button {
     display: flex;
     width: fit-content;
     align-items: center;
     gap: 7px;
-    margin: 10px 0 0 auto;
+    margin: 0;
     padding: 8px 12px;
     border: 1px solid rgba(255, 255, 255, 0.28);
     border-radius: 999px;
@@ -2329,6 +2355,12 @@ td select {
     font-size: 13px;
     font-weight: 800;
     text-decoration: none;
+  }
+
+  .sidebar-sign-out-button {
+    border-color: rgba(255, 192, 184, 0.58);
+    color: #fff;
+    background: rgba(142, 45, 37, 0.42);
   }
 
   .sidebar-support-link span {

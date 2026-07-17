@@ -6,28 +6,28 @@ import {
   REASON_CODES,
   burdenLabel,
   leaveLabel,
-} from "./rules.js?v=0.4.3";
+} from "./rules.js?v=0.4.5";
 import {
   allocationBalance,
   calculateCase,
   caseTotals,
   RULE_VERSION,
   roundMoney,
-} from "./calculator.js?v=0.4.3";
-import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.3";
-import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.3";
-import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.3";
-import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.3";
-import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.3";
-import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.3";
-import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.3";
-import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.3";
-import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.3";
-import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.3";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.3";
-import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.3";
-import { GoogleCloudService } from "./google-cloud.js?v=0.4.3";
-import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.3";
+} from "./calculator.js?v=0.4.5";
+import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.5";
+import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.5";
+import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.5";
+import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.5";
+import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.5";
+import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.5";
+import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.5";
+import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.5";
+import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.5";
+import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.5";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.5";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.5";
+import { GoogleCloudService } from "./google-cloud.js?v=0.4.5";
+import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.5";
 
 const app = document.querySelector("#app");
 let state = localStorageAdapter.load();
@@ -66,6 +66,7 @@ const googleCloud = new GoogleCloudService({
     state.meta.lastSyncedAt = syncedAt;
     localStorageAdapter.save(state);
   },
+  onAccountMetadataError: (message) => showToast(message),
   autoConnectDrive: true,
 });
 
@@ -223,6 +224,21 @@ function accountButtonText() {
   return cloudUi.connected ? `${name}・已連接` : `${name}・連接 Drive`;
 }
 
+function signOutFromApp() {
+  if (activePage === "case" && document.querySelector("#case-form")) syncDraftFromForm();
+  const messages = ["確定要登出目前的 Google 帳號嗎？"];
+  if (hasUnsavedDraft()) messages.push("目前案件尚未儲存；登出後這次輸入可能無法復原。");
+  if (cloudUi.connected && !cloudUi.syncHealthy) messages.push("Google Drive 尚有同步待處理資料；最近修改已保存在這台裝置的本機快取。");
+  else messages.push("系統會保留這台裝置最近一次的本機資料，下次登入後再讀取 Google Drive 主檔。");
+  if (!confirm(messages.join("\n\n"))) return;
+  googleCloud.signOut();
+  state.meta.storageMode = "local";
+  localStorageAdapter.save(state);
+  modal = null;
+  render();
+  showToast("已登出 Google 帳號");
+}
+
 function renderAppFooter(extraClass = "") {
   return `<footer class="app-footer ${escapeHtml(extraClass)}">
     <div class="footer-copyright"><strong>${escapeHtml(COPYRIGHT_NOTICE)}</strong><span>江志宏 · 系統版本 ${escapeHtml(APP_VERSION)}</span></div>
@@ -277,7 +293,10 @@ function render() {
               <span class="nav-icon">${icon}</span><span>${label}</span>
             </button>`).join("")}
         </nav>
-        <button class="sidebar-support-link" type="button" data-open-error-report aria-label="回報系統錯誤"><span>!</span>錯誤回報</button>
+        <div class="sidebar-quick-actions">
+          <button class="sidebar-support-link" type="button" data-open-error-report aria-label="回報系統錯誤"><span>!</span>錯誤回報</button>
+          ${cloudUi.profile ? `<button class="sidebar-sign-out-button" type="button" data-sign-out aria-label="登出 ${escapeHtml(cloudUi.profile.email || cloudUi.profile.name || "Google 帳號")}">登出</button>` : ""}
+        </div>
         <div class="sidebar-foot">
           <div class="sidebar-meta">規則版本：${escapeHtml(friendlyRuleVersion(RULE_VERSION))}<br />
             現行國小鐘點：${formatMoney(state.config.hourlyRate)} 元<br />
@@ -292,6 +311,7 @@ function render() {
             <div class="account-chip save-chip"><span class="account-dot ${cloudUi.syncHealthy ? "connected" : ""}"></span>${savedTimeText()}</div>
             <button class="account-chip topbar-report-button" type="button" data-open-error-report aria-label="回報系統錯誤"><span class="report-mark">!</span>錯誤回報</button>
             <button class="account-chip account-button" type="button" id="open-access"><span class="google-mark">G</span>${escapeHtml(accountButtonText())}</button>
+            ${cloudUi.profile ? `<button class="account-chip sign-out-button" type="button" data-sign-out aria-label="登出 ${escapeHtml(cloudUi.profile.email || cloudUi.profile.name || "Google 帳號")}">登出</button>` : ""}
           </div>
         </header>
         <section class="content page-${activePage} ${activePage === "dashboard" ? "dashboard-content" : ""}">${renderPage()}</section>
@@ -341,7 +361,7 @@ function renderAccessGate() {
           <div><span>3</span><strong>進入系統</strong><small>自動讀取與同步主檔</small></div>
         </div>
         ${accountAction}
-        <div class="admin-boundary login-gate-boundary"><strong>資料仍由使用者保管</strong><span>案件與名冊不會存進中央後臺。</span><small>伺服端只保存登入資格所需的帳號紀錄；系統資料存放於登入者自己的 Google Drive 隱藏資料空間。</small></div>
+        <div class="admin-boundary login-gate-boundary"><strong>資料仍由使用者保管</strong><span>案件、名冊與費用資料不會存進中央後臺。</span><small>伺服端只保存登入帳號資料，以及使用者填報的學校名稱與更新時間；系統資料存放於登入者自己的 Google Drive 隱藏資料空間。</small></div>
         ${renderAppFooter("login-gate-footer")}
       </section>
     </main>
@@ -780,17 +800,19 @@ function renderAdminAccountsCard() {
   if (adminAccountUi.loading) content = '<div class="empty">正在讀取登入帳號…</div>';
   else if (adminAccountUi.error) content = `<div class="notice danger">${escapeHtml(adminAccountUi.error)}</div>`;
   else if (adminAccountUi.loaded) {
-    content = `<div class="table-wrap admin-account-table"><table><thead><tr><th>帳號</th><th>教育網域</th><th>最近登入</th><th>狀態</th><th></th></tr></thead><tbody>${adminAccountUi.accounts.map((account) => {
+    content = `<div class="table-wrap admin-account-table"><table><thead><tr><th>帳號</th><th>學校名稱（使用者填報）</th><th>教育網域</th><th>最近登入</th><th>狀態</th><th></th></tr></thead><tbody>${adminAccountUi.accounts.map((account) => {
       const protectedAccount = account.protected === true;
       const enabled = account.enabled !== false;
-      return `<tr><td><strong>${escapeHtml(account.name || account.email)}</strong><small>${escapeHtml(account.email)}</small></td><td>${escapeHtml(account.hosted_domain || (protectedAccount ? "中央管理帳號" : "—"))}</td><td>${escapeHtml(formatDateTime(account.last_login_at))}</td><td><span class="badge ${enabled ? "ready" : "pending"}">${enabled ? "可登入" : "已停用"}</span></td><td>${protectedAccount ? '<span class="muted">受保護</span>' : `<button class="btn ${enabled ? "btn-danger" : "btn-primary"} btn-small" type="button" data-toggle-login-account="${escapeHtml(account.subject)}" data-next-enabled="${enabled ? "false" : "true"}">${enabled ? "停用登入" : "恢復登入"}</button>`}</td></tr>`;
-    }).join("") || '<tr><td colspan="5" class="empty">尚無教育帳號登入紀錄。</td></tr>'}</tbody></table></div>`;
+      const schoolName = account.school_name || "尚未填報";
+      const schoolUpdatedAt = account.school_name_updated_at ? `更新：${formatDateTime(account.school_name_updated_at)}` : "";
+      return `<tr><td><strong>${escapeHtml(account.name || account.email)}</strong><small>${escapeHtml(account.email)}</small></td><td><strong>${escapeHtml(schoolName)}</strong>${schoolUpdatedAt ? `<small>${escapeHtml(schoolUpdatedAt)}</small>` : ""}</td><td>${escapeHtml(account.hosted_domain || (protectedAccount ? "中央管理帳號" : "—"))}</td><td>${escapeHtml(formatDateTime(account.last_login_at))}</td><td><span class="badge ${enabled ? "ready" : "pending"}">${enabled ? "可登入" : "已停用"}</span></td><td>${protectedAccount ? '<span class="muted">受保護</span>' : `<button class="btn ${enabled ? "btn-danger" : "btn-primary"} btn-small" type="button" data-toggle-login-account="${escapeHtml(account.subject)}" data-next-enabled="${enabled ? "false" : "true"}">${enabled ? "停用登入" : "恢復登入"}</button>`}</td></tr>`;
+    }).join("") || '<tr><td colspan="6" class="empty">尚無教育帳號登入紀錄。</td></tr>'}</tbody></table></div>`;
   }
   return `<div class="card admin-account-card settings-section" id="settings-admin">
     <div class="card-header"><div><h2>登入帳號管理</h2><p>教育帳號第一次登入後會出現在此處；不需事前核准，只管理需要停用的例外帳號。</p></div><button class="btn btn-secondary btn-small" type="button" id="refresh-admin-accounts" ${adminAccountUi.loading ? "disabled" : ""}>重新整理</button></div>
     <div class="notice warning"><strong>停用範圍：</strong>只阻擋此帳號進入本系統，不會刪除該帳號 Drive 內的資料。已登入者會在下次資格檢查（最遲約 5 分鐘）退出。</div>
     ${content}
-    <div class="help">中央後臺只保存信箱、Google 帳號識別碼、教育網域、啟用狀態與登入時間；不保存學校名冊、請假案件或費用資料。</div>
+    <div class="help">中央後臺保存信箱、Google 帳號識別碼、教育網域、啟用狀態、登入時間，以及使用者填報的學校名稱與更新時間；不保存學校名冊、請假案件或費用資料。</div>
   </div>`;
 }
 
@@ -803,7 +825,7 @@ function renderSettings() {
       <div class="card settings-section" id="settings-basic">
         <div class="card-header"><div><h2>學校基本資料與金額</h2><p>修改後，既有案件須重新試算才會套用。</p></div></div>
         <form id="settings-form"><div class="form-grid">
-          <div class="field span-12"><label for="schoolName">學校名稱</label><input id="schoolName" name="schoolName" value="${escapeHtml(state.config.schoolName)}" /></div>
+          <div class="field span-12"><label for="schoolName">學校名稱</label><input id="schoolName" name="schoolName" maxlength="100" value="${escapeHtml(state.config.schoolName)}" /><div class="help">儲存後會同步至中央帳號管理，供管理者辨識使用單位；此名稱由使用者自行填報。案件、名冊與費用資料不會上傳中央後臺。</div></div>
           <div class="field"><label for="academicYear">學年度</label><input id="academicYear" name="academicYear" value="${escapeHtml(state.config.academicYear)}" /></div>
           <div class="field"><label for="term">學期</label><select id="term" name="term">${option("1", "第一學期", state.config.term)}${option("2", "第二學期", state.config.term)}</select></div>
           <div class="field"><label for="hourlyRate">國小每節鐘點費</label><input id="hourlyRate" name="hourlyRate" type="number" min="0" value="${state.config.hourlyRate}" /></div>
@@ -959,6 +981,7 @@ function bindCommonEvents() {
   document.querySelectorAll("[data-go]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.go)));
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", () => { modal = null; render(); }));
   document.querySelector("#open-access")?.addEventListener("click", () => { modal = "access"; render(); });
+  document.querySelectorAll("[data-sign-out]").forEach((button) => button.addEventListener("click", signOutFromApp));
   bindErrorReportTriggers();
   bindActiveDialogAccessibility();
 }
@@ -1111,13 +1134,7 @@ function bindErrorReportModal() {
 
 function bindAccessModal() {
   document.querySelector("#authorize-drive")?.addEventListener("click", () => googleCloud.requestDriveAccess());
-  document.querySelector("#google-sign-out")?.addEventListener("click", () => {
-    googleCloud.signOut();
-    state.meta.storageMode = "local";
-    localStorageAdapter.save(state);
-    modal = null;
-    render();
-  });
+  document.querySelector("#google-sign-out")?.addEventListener("click", signOutFromApp);
   document.querySelector("#retry-google")?.addEventListener("click", () => googleCloud.initialize());
 }
 
@@ -1757,6 +1774,7 @@ function bindSettingsEvents() {
         return count + (invalidateCaseCalculation(leaveCase) ? 1 : 0);
       }, 0);
     saveState("update-settings", "config");
+    void googleCloud.syncReportedSchoolNameSafely(state);
     render();
     showToast(invalidatedCount ? `設定已儲存；${invalidatedCount} 件既有試算已失效，請重新試算` : "設定已儲存");
   });

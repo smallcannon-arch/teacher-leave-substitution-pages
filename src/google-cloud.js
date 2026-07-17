@@ -1,4 +1,4 @@
-import { createBackup, parseBackup } from "./backup.js?v=0.4.3";
+import { createBackup, parseBackup } from "./backup.js?v=0.4.5";
 
 const DRIVE_FILE_NAME = "substitute-fee-desk-data-v1.json";
 const DEFAULT_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
@@ -70,13 +70,14 @@ function loadGoogleScript() {
 }
 
 export class GoogleCloudService {
-  constructor({ apiBaseUrl, getState, applyRemoteState, chooseDriveData, onChange, onSync, autoConnectDrive = false, authHeartbeatMs = 5 * 60 * 1000 } = {}) {
+  constructor({ apiBaseUrl, getState, applyRemoteState, chooseDriveData, onChange, onSync, onAccountMetadataError, autoConnectDrive = false, authHeartbeatMs = 5 * 60 * 1000 } = {}) {
     this.apiBaseUrl = String(apiBaseUrl || "").replace(/\/$/, "");
     this.getState = getState;
     this.applyRemoteState = applyRemoteState;
     this.chooseDriveData = chooseDriveData;
     this.onChange = onChange;
     this.onSync = onSync;
+    this.onAccountMetadataError = onAccountMetadataError;
     this.autoConnectDrive = autoConnectDrive;
     this.authHeartbeatMs = authHeartbeatMs;
     this.phase = "initializing";
@@ -98,6 +99,9 @@ export class GoogleCloudService {
     this.authHeartbeatTimer = null;
     this.identityRefresh = null;
     this.driveTokenExpiryTimer = null;
+    this.reportedSchoolName = null;
+    this.schoolNameSyncInFlight = null;
+    this.lastSchoolNameSyncError = "";
   }
 
   snapshot() {
@@ -196,6 +200,44 @@ export class GoogleCloudService {
       method: "PATCH",
       body: { enabled: Boolean(enabled) },
     });
+  }
+
+  schoolNameFromState(sourceState = this.getState?.()) {
+    const schoolName = String(sourceState?.config?.schoolName || "").replace(/\s+/g, " ").trim();
+    return schoolName.includes("○○") ? "" : schoolName;
+  }
+
+  async syncReportedSchoolName(sourceState = this.getState?.()) {
+    if (!this.profile || !this.idToken) return null;
+    const schoolName = this.schoolNameFromState(sourceState);
+    if (schoolName === this.reportedSchoolName) return null;
+    if (this.schoolNameSyncInFlight) await this.schoolNameSyncInFlight.catch(() => {});
+    if (schoolName === this.reportedSchoolName) return null;
+
+    const request = this.apiRequest("/auth/account", {
+      method: "PATCH",
+      body: { school_name: schoolName },
+    });
+    this.schoolNameSyncInFlight = request;
+    try {
+      const result = await request;
+      this.reportedSchoolName = String(result?.account?.school_name || "");
+      this.lastSchoolNameSyncError = "";
+      return result.account || null;
+    } finally {
+      if (this.schoolNameSyncInFlight === request) this.schoolNameSyncInFlight = null;
+    }
+  }
+
+  async syncReportedSchoolNameSafely(sourceState = this.getState?.()) {
+    try {
+      return await this.syncReportedSchoolName(sourceState);
+    } catch (error) {
+      const message = `學校名稱尚未同步至中央帳號管理：${error.message || "連線失敗"}`;
+      if (message !== this.lastSchoolNameSyncError) this.onAccountMetadataError?.(message);
+      this.lastSchoolNameSyncError = message;
+      return null;
+    }
   }
 
   finishIdentityRefresh(error, profile = null) {
@@ -497,6 +539,7 @@ export class GoogleCloudService {
         syncedAt = remote.exportedAt || file.modifiedTime;
       }
     }
+    await this.syncReportedSchoolNameSafely(this.getState());
     this.onSync?.({ ownerSub: this.profile.subject, syncedAt, fileId: this.driveFileId });
     this.update("connected", "Google Drive 已連接，之後的修改會自動同步");
   }
@@ -527,6 +570,7 @@ export class GoogleCloudService {
       clearTimeout(this.saveRetryTimer);
       this.saveRetryTimer = null;
       this.saveRetryCount = 0;
+      await this.syncReportedSchoolNameSafely(nextState);
       this.onSync?.({ ownerSub: this.profile.subject, syncedAt, fileId: this.driveFileId });
       this.update("connected", "Google Drive 已同步");
     } catch (error) {
@@ -568,6 +612,9 @@ export class GoogleCloudService {
     this.accessTokenExpiresAt = 0;
     this.driveFileId = "";
     this.profile = null;
+    this.reportedSchoolName = null;
+    this.schoolNameSyncInFlight = null;
+    this.lastSchoolNameSyncError = "";
     globalThis.google?.accounts?.id?.disableAutoSelect();
     this.update("ready", "已登出；本機仍保留最近一次資料");
   }
