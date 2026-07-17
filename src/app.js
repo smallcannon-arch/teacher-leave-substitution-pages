@@ -6,28 +6,28 @@ import {
   REASON_CODES,
   burdenLabel,
   leaveLabel,
-} from "./rules.js?v=0.4.6";
+} from "./rules.js?v=0.4.7";
 import {
   allocationBalance,
   calculateCase,
   caseTotals,
   RULE_VERSION,
   roundMoney,
-} from "./calculator.js?v=0.4.6";
-import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.6";
-import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.6";
-import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.6";
-import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.6";
-import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.6";
-import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.6";
-import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.6";
-import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.6";
-import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.6";
-import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.6";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.6";
-import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.6";
-import { GoogleCloudService } from "./google-cloud.js?v=0.4.6";
-import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.6";
+} from "./calculator.js?v=0.4.7";
+import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.7";
+import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.7";
+import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.7";
+import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.7";
+import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.7";
+import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.7";
+import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.7";
+import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.7";
+import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.7";
+import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.7";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.7";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.7";
+import { GoogleCloudService } from "./google-cloud.js?v=0.4.7";
+import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.7";
 
 const app = document.querySelector("#app");
 let state = localStorageAdapter.load();
@@ -808,9 +808,13 @@ function renderAdminAccountsCard() {
     content = `<div class="table-wrap admin-account-table"><table><thead><tr><th>帳號</th><th>學校名稱（使用者填報）</th><th>教育網域</th><th>最近登入</th><th>狀態</th><th></th></tr></thead><tbody>${adminAccountUi.accounts.map((account) => {
       const protectedAccount = account.protected === true;
       const enabled = account.enabled !== false;
-      const schoolName = account.school_name || "尚未填報";
-      const schoolUpdatedAt = account.school_name_updated_at ? `更新：${formatDateTime(account.school_name_updated_at)}` : "";
-      return `<tr><td><strong>${escapeHtml(account.name || account.email)}</strong><small>${escapeHtml(account.email)}</small></td><td><strong>${escapeHtml(schoolName)}</strong>${schoolUpdatedAt ? `<small>${escapeHtml(schoolUpdatedAt)}</small>` : ""}</td><td>${escapeHtml(account.hosted_domain || (protectedAccount ? "中央管理帳號" : "—"))}</td><td>${escapeHtml(formatDateTime(account.last_login_at))}</td><td><span class="badge ${enabled ? "ready" : "pending"}">${enabled ? "可登入" : "已停用"}</span></td><td>${protectedAccount ? '<span class="muted">受保護</span>' : `<button class="btn ${enabled ? "btn-danger" : "btn-primary"} btn-small" type="button" data-toggle-login-account="${escapeHtml(account.subject)}" data-next-enabled="${enabled ? "false" : "true"}">${enabled ? "停用登入" : "恢復登入"}</button>`}</td></tr>`;
+      const hasSchoolName = Boolean(account.school_name?.trim());
+      const schoolName = hasSchoolName ? account.school_name.trim() : "尚未填報";
+      const schoolUpdatedAt = account.school_name_updated_at ? formatDateTime(account.school_name_updated_at) : "";
+      const schoolCell = hasSchoolName
+        ? `<div class="account-school-stack"><strong>${escapeHtml(schoolName)}</strong>${schoolUpdatedAt ? `<small>更新時間：${escapeHtml(schoolUpdatedAt)}</small>` : ""}</div>`
+        : `<div class="account-school-stack"><span class="account-school-empty">尚未填報</span><small>${schoolUpdatedAt ? `最近同步：${escapeHtml(schoolUpdatedAt)}` : "請使用者至系統設定填寫"}</small></div>`;
+      return `<tr><td><strong>${escapeHtml(account.name || account.email)}</strong><small>${escapeHtml(account.email)}</small></td><td class="account-school-cell">${schoolCell}</td><td>${escapeHtml(account.hosted_domain || (protectedAccount ? "中央管理帳號" : "—"))}</td><td>${escapeHtml(formatDateTime(account.last_login_at))}</td><td><span class="badge ${enabled ? "ready" : "pending"}">${enabled ? "可登入" : "已停用"}</span></td><td>${protectedAccount ? '<span class="muted">受保護</span>' : `<button class="btn ${enabled ? "btn-danger" : "btn-primary"} btn-small" type="button" data-toggle-login-account="${escapeHtml(account.subject)}" data-next-enabled="${enabled ? "false" : "true"}">${enabled ? "停用登入" : "恢復登入"}</button>`}</td></tr>`;
     }).join("") || '<tr><td colspan="6" class="empty">尚無教育帳號登入紀錄。</td></tr>'}</tbody></table></div>`;
   }
   return `<div class="card admin-account-card settings-section" id="settings-admin">

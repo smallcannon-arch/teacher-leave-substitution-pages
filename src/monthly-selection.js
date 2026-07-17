@@ -1,4 +1,4 @@
-import { caseServiceMonths } from "./monthly-close.js?v=0.4.6";
+import { caseServiceMonths } from "./monthly-close.js?v=0.4.7";
 
 export function selectMonthlyCases(cases = [], month = "") {
   const relevantCases = cases.filter((item) => caseServiceMonths(item).includes(month));

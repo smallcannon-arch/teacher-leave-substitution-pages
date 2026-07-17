@@ -945,6 +945,41 @@ h3 {
   font-size: 13px;
 }
 
+.admin-account-table .account-school-cell {
+  min-width: 240px;
+}
+
+.account-school-stack {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.account-school-stack strong {
+  line-height: 1.4;
+}
+
+.account-school-stack small {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.account-school-empty {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid #e8d596;
+  border-radius: 999px;
+  color: #795313;
+  background: #fff8dc;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
 .admin-account-card > .help {
   margin-top: 12px;
 }
