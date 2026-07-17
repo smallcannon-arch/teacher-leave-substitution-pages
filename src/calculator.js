@@ -1,5 +1,5 @@
-import { BURDEN, determineBurden, ruleMeta } from "./rules.js?v=0.4.7";
-import { calculationInputSignature } from "./case-integrity.js?v=0.4.7";
+import { BURDEN, determineBurden, ruleMeta } from "./rules.js?v=0.4.8";
+import { calculationInputSignature } from "./case-integrity.js?v=0.4.8";
 
 export const RULE_VERSION = "rules-0.2+decision-2026.07";
 export const RATE_VERSION = "114.09.01-current";
@@ -44,6 +44,31 @@ export function selectHourlyRate(date, config = {}) {
     return { ok: false, error: `${date} 的鐘點費率必須是非負有限整數。` };
   }
   return { ok: true, id: selected.id || selected.effectiveFrom, amount };
+}
+
+function isStepValue(value, step) {
+  return Math.abs((value / step) - Math.round(value / step)) < 1e-9;
+}
+
+export function validateCaseNumericInputs(leaveCase = {}) {
+  const errors = [];
+  const validate = (field, label, { integer = false, step = 0 } = {}) => {
+    const value = Number(leaveCase[field] ?? 0);
+    if (!Number.isFinite(value) || value < 0) {
+      errors.push(`${label}必須是大於或等於 0 的有效數字。`);
+      return;
+    }
+    if (integer && !Number.isInteger(value)) errors.push(`${label}必須是整數。`);
+    if (step && !isStepValue(value, step)) errors.push(`${label}必須以 ${step} 為最小單位。`);
+  };
+
+  if (["personal", "family_care", "wellbeing"].includes(leaveCase.leaveType)) {
+    validate("leaveHours", "本次請假時數", { step: 0.5 });
+    validate("accumulatedHoursBefore", "事假類請假前累計", { step: 0.5 });
+  }
+  if (leaveCase.leaveType === "sick") validate("consecutiveSickDays", "連續病假日數", { integer: true });
+  if (leaveCase.leaveType === "business_trip") validate("businessTripDays", "公差日數", { integer: true });
+  return errors;
 }
 
 function feeId(caseId, parts) {
@@ -92,7 +117,7 @@ export function calculateCase(leaveCase, config) {
   const decisions = [];
   const feeMap = new Map();
   const validation = validateAffectedPeriods(leaveCase);
-  const errors = [...validation.errors];
+  const errors = [...validateCaseNumericInputs(leaveCase), ...validation.errors];
   const warnings = [];
 
   for (const period of validation.validPeriods) {
@@ -110,7 +135,12 @@ export function calculateCase(leaveCase, config) {
       errors.push(`${period.date} 第 ${period.periodNo} 節：${decision.note}`);
       continue;
     }
-    if (decision.burden === BURDEN.NONE) continue;
+    if (decision.burden === BURDEN.NONE) {
+      if (["internal_sub", "external_sub"].includes(period.handling)) {
+        errors.push(`${period.date} 第 ${period.periodNo} 節：規則判定應採調課、補課或無課務，但目前選擇「${period.handling === "internal_sub" ? "校內代課" : "外聘代課"}」，請修正處理方式或另依規人工認定。`);
+      }
+      continue;
+    }
     if (!period.substituteId) {
       errors.push(`${period.date} 第 ${period.periodNo} 節尚未指定代課者。`);
       continue;
@@ -174,6 +204,9 @@ export function calculateCase(leaveCase, config) {
       serviceMonth: (leaveCase.homeroomStartDate || leaveCase.startDate || "").slice(0, 7),
       quantity: homeroom.validDays,
       unitRate: homeroom.dailyRate,
+      monthlyRate: homeroom.monthlyRate,
+      daysInMonth: homeroom.daysInMonth,
+      calculationNote: `${homeroom.monthlyRate} ÷ ${homeroom.daysInMonth} × ${homeroom.validDays}，總額依設定方式取整`,
       amount: homeroom.amount,
       manual: false,
     });
@@ -246,11 +279,13 @@ export function calculateHomeroomAllowance(leaveCase, config) {
     : startPart === endPart;
   const [year, month] = start.split("-").map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
-  const dailyRateRaw = Number(config.homeroomMonthly || 0) / daysInMonth;
+  const monthlyRate = Number(config.homeroomMonthly || 0);
+  const dailyRateRaw = monthlyRate / daysInMonth;
   return {
     validDays,
     daysInMonth,
-    dailyRate: roundMoney(dailyRateRaw, config.roundingMode),
+    monthlyRate,
+    dailyRate: dailyRateRaw,
     amount: roundMoney(dailyRateRaw * validDays, config.roundingMode),
     warning: includesUnpaidHalfDay
       ? "代理導師期間含未滿一日的半日時段；依目前規則該半日不計職務加給。"
@@ -261,6 +296,22 @@ export function calculateHomeroomAllowance(leaveCase, config) {
 export function allocationBalance(fee, rows = []) {
   const allocated = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   return roundMoney(Number(fee.amount || 0) - allocated, "keep2");
+}
+
+export function validateAllocationRows(fee, rows = [], allowedSourceIds = null) {
+  const errors = [];
+  if (!Array.isArray(rows) || !rows.length) return ["尚未填寫公費分攤來源。"];
+  const allowed = allowedSourceIds ? new Set(allowedSourceIds) : null;
+  rows.forEach((row, index) => {
+    const number = index + 1;
+    const amount = Number(row?.amount);
+    if (!row?.sourceId) errors.push(`第 ${number} 筆分攤尚未選擇經費來源。`);
+    else if (allowed && !allowed.has(row.sourceId)) errors.push(`第 ${number} 筆分攤的經費來源已不存在或不可用。`);
+    if (!Number.isFinite(amount) || amount < 0) errors.push(`第 ${number} 筆分攤金額必須是大於或等於 0 的有效數字。`);
+    else if (!isStepValue(amount, 0.01)) errors.push(`第 ${number} 筆分攤金額最多只能有兩位小數。`);
+  });
+  if (!errors.length && allocationBalance(fee, rows) !== 0) errors.push("公費分攤金額尚未平衡。");
+  return errors;
 }
 
 export function caseTotals(feeItems = []) {

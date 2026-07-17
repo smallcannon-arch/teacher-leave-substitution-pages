@@ -1,4 +1,4 @@
-import { createBackup, parseBackup } from "./backup.js?v=0.4.7";
+import { createBackup, parseBackup } from "./backup.js?v=0.4.8";
 
 const DRIVE_FILE_NAME = "substitute-fee-desk-data-v1.json";
 const DEFAULT_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
@@ -6,6 +6,14 @@ const DRIVE_API = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3";
 const TOKEN_RENEWAL_LEAD_MS = 5 * 60 * 1000;
 const TOKEN_REQUEST_TIMEOUT_MS = 15 * 1000;
+
+export class DriveConflictError extends Error {
+  constructor(message = "Google Drive 主檔已在其他分頁或裝置更新，為避免覆蓋，這次修改尚未上傳") {
+    super(message);
+    this.name = "DriveConflictError";
+    this.code = "DRIVE_CONFLICT";
+  }
+}
 
 export function tokenExpiresAt(token = "") {
   try {
@@ -90,6 +98,7 @@ export class GoogleCloudService {
     this.accessToken = "";
     this.accessTokenExpiresAt = 0;
     this.driveFileId = "";
+    this.driveFileVersion = "";
     this.tokenClient = null;
     this.saveTimer = null;
     this.saveInFlight = null;
@@ -110,7 +119,7 @@ export class GoogleCloudService {
       message: this.message,
       configured: Boolean(this.clientId),
       profile: this.profile ? { ...this.profile } : null,
-      connected: ["connected", "saving", "error", "reauthorization-needed", "authorizing-drive"].includes(this.phase) && Boolean(this.driveFileId),
+      connected: ["connected", "saving", "error", "conflict", "reauthorization-needed", "authorizing-drive"].includes(this.phase) && Boolean(this.driveFileId),
       syncHealthy: ["connected", "saving"].includes(this.phase) && Boolean(this.driveFileId),
     };
   }
@@ -442,7 +451,9 @@ export class GoogleCloudService {
     }
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      throw new Error(payload?.error?.message || `Google Drive 回應 ${response.status}`);
+      const error = new Error(payload?.error?.message || `Google Drive 回應 ${response.status}`);
+      error.status = response.status;
+      throw error;
     }
     return response;
   }
@@ -451,7 +462,7 @@ export class GoogleCloudService {
     const params = new URLSearchParams({
       spaces: "appDataFolder",
       q: `name='${DRIVE_FILE_NAME}' and trashed=false`,
-      fields: "files(id,name,modifiedTime,size)",
+      fields: "files(id,name,modifiedTime,size,version)",
       orderBy: "modifiedTime desc",
       pageSize: "1",
     });
@@ -465,6 +476,12 @@ export class GoogleCloudService {
     const result = parseBackup(await response.text());
     if (!result.ok) throw new Error(`Drive 主檔無法讀取：${result.error}`);
     return result.payload;
+  }
+
+  async readDriveMetadata(fileId = this.driveFileId) {
+    const response = await this.driveFetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,modifiedTime,version`);
+    const metadata = await response.json();
+    return { ...metadata, etag: response.headers.get("ETag") || "" };
   }
 
   async createDriveFile(state) {
@@ -487,7 +504,7 @@ export class GoogleCloudService {
       `--${boundary}--`,
       "",
     ].join("\r\n");
-    const response = await this.driveFetch(`${DRIVE_UPLOAD_API}/files?uploadType=multipart&fields=id,modifiedTime`, {
+    const response = await this.driveFetch(`${DRIVE_UPLOAD_API}/files?uploadType=multipart&fields=id,modifiedTime,version`, {
       method: "POST",
       headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
       body,
@@ -496,16 +513,30 @@ export class GoogleCloudService {
   }
 
   async updateDriveFile(state) {
+    const metadata = await this.readDriveMetadata();
+    if (this.driveFileVersion && String(metadata.version || "") !== String(this.driveFileVersion)) {
+      throw new DriveConflictError();
+    }
     const backup = createBackup(state);
-    const response = await this.driveFetch(
-      `${DRIVE_UPLOAD_API}/files/${encodeURIComponent(this.driveFileId)}?uploadType=media&fields=id,modifiedTime`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json; charset=UTF-8" },
-        body: JSON.stringify(backup),
-      },
-    );
-    await response.json();
+    let response;
+    try {
+      response = await this.driveFetch(
+        `${DRIVE_UPLOAD_API}/files/${encodeURIComponent(this.driveFileId)}?uploadType=media&fields=id,modifiedTime,version`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json; charset=UTF-8",
+            ...(metadata.etag ? { "If-Match": metadata.etag } : {}),
+          },
+          body: JSON.stringify(backup),
+        },
+      );
+    } catch (error) {
+      if ([409, 412].includes(error.status)) throw new DriveConflictError();
+      throw error;
+    }
+    const updated = await response.json();
+    this.driveFileVersion = String(updated.version || metadata.version || "");
     return backup.exportedAt;
   }
 
@@ -516,9 +547,11 @@ export class GoogleCloudService {
     if (!file) {
       const created = await this.createDriveFile(this.getState());
       this.driveFileId = created.id;
+      this.driveFileVersion = String(created.version || "");
       syncedAt = created.syncedAt;
     } else {
       this.driveFileId = file.id;
+      this.driveFileVersion = String(file.version || "");
       const remote = await this.readDriveBackup(file.id);
       const localState = this.getState();
       let choice = decideAutomaticDriveChoice({
@@ -545,12 +578,16 @@ export class GoogleCloudService {
   }
 
   queueSave(state) {
-    if (!this.driveFileId || !["connected", "saving", "error", "reauthorization-needed"].includes(this.phase)) return;
+    if (!this.driveFileId || !["connected", "saving", "error", "conflict", "reauthorization-needed"].includes(this.phase)) return;
     this.pendingState = structuredClone(state);
     clearTimeout(this.saveTimer);
     clearTimeout(this.saveRetryTimer);
     this.saveRetryTimer = null;
     this.saveRetryCount = 0;
+    if (this.phase === "conflict") {
+      this.update("conflict", "Drive 主檔已有其他修改；本機資料已保留，請重新整理後比對版本");
+      return;
+    }
     if (!this.accessToken || Date.now() >= this.accessTokenExpiresAt || this.phase === "reauthorization-needed") {
       this.markDriveReauthorizationNeeded();
       return;
@@ -575,6 +612,13 @@ export class GoogleCloudService {
       this.update("connected", "Google Drive 已同步");
     } catch (error) {
       if (!this.pendingState) this.pendingState = nextState;
+      if (error.code === "DRIVE_CONFLICT") {
+        clearTimeout(this.saveRetryTimer);
+        this.saveRetryTimer = null;
+        this.saveRetryCount = 0;
+        this.update("conflict", `${error.message}；本機資料已保留，請重新整理後選擇要使用的版本`);
+        return;
+      }
       if (this.phase === "reauthorization-needed") {
         this.update("reauthorization-needed", `${error.message}；修改仍保存在本機，重新連接後會自動補同步`);
         return;
@@ -611,6 +655,7 @@ export class GoogleCloudService {
     this.accessToken = "";
     this.accessTokenExpiresAt = 0;
     this.driveFileId = "";
+    this.driveFileVersion = "";
     this.profile = null;
     this.reportedSchoolName = null;
     this.schoolNameSyncInFlight = null;

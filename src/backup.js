@@ -1,4 +1,4 @@
-import { prepareState } from "./storage.js?v=0.4.7";
+import { prepareState } from "./storage.js?v=0.4.8";
 
 export const BACKUP_FORMAT = "substitute-fee-desk-backup";
 export const BACKUP_VERSION = 1;
@@ -37,6 +37,83 @@ export function createBackup(state, date = new Date()) {
   };
 }
 
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasText(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function validateUniqueIds(items, label) {
+  const ids = new Set();
+  for (const item of items) {
+    if (!isRecord(item) || !hasText(item.id)) return `${label}含有缺少編號或格式錯誤的資料。`;
+    if (ids.has(item.id)) return `${label}含有重複編號 ${item.id}。`;
+    ids.add(item.id);
+  }
+  return "";
+}
+
+function validateOptionalRecordArray(owner, field, label) {
+  if (!(field in owner)) return "";
+  if (!Array.isArray(owner[field])) return `${label}格式不正確。`;
+  if (owner[field].some((item) => !isRecord(item))) return `${label}含有損壞資料。`;
+  return "";
+}
+
+function validateStateRecords(state) {
+  let error = validateUniqueIds(state.people || [], "教師名單");
+  if (error) return error;
+  if ((state.people || []).some((person) => !hasText(person.name))) return "教師名單含有空白姓名。";
+
+  if ((state.subjects || []).some((subject) => !hasText(subject))) return "科目清單含有格式錯誤的資料。";
+
+  error = validateUniqueIds(state.fundSources || [], "經費來源");
+  if (error) return error;
+  if ((state.fundSources || []).some((source) => !hasText(source.name))) return "經費來源含有空白名稱。";
+
+  error = validateUniqueIds(state.cases || [], "請假案件");
+  if (error) return error;
+  for (const leaveCase of state.cases || []) {
+    for (const [field, label] of [
+      ["affectedPeriods", `案件 ${leaveCase.id} 的課節`],
+      ["manualFees", `案件 ${leaveCase.id} 的人工費用`],
+      ["allocations", `案件 ${leaveCase.id} 的經費分攤`],
+    ]) {
+      error = validateOptionalRecordArray(leaveCase, field, label);
+      if (error) return error;
+    }
+    for (const allocation of leaveCase.allocations || []) {
+      error = validateOptionalRecordArray(allocation, "rows", `案件 ${leaveCase.id} 的分攤明細`);
+      if (error) return error;
+    }
+    if (leaveCase.calculation !== undefined && leaveCase.calculation !== null) {
+      if (!isRecord(leaveCase.calculation)) return `案件 ${leaveCase.id} 的試算結果格式不正確。`;
+      for (const [field, label] of [
+        ["decisions", "規則判斷"],
+        ["feeItems", "費用項目"],
+        ["allocations", "試算分攤"],
+      ]) {
+        error = validateOptionalRecordArray(leaveCase.calculation, field, `案件 ${leaveCase.id} 的${label}`);
+        if (error) return error;
+      }
+      for (const field of ["errors", "warnings"]) {
+        if (field in leaveCase.calculation && !Array.isArray(leaveCase.calculation[field])) return `案件 ${leaveCase.id} 的試算訊息格式不正確。`;
+      }
+    }
+  }
+
+  error = validateUniqueIds(state.monthlyCloses || [], "月結紀錄");
+  if (error) return error;
+  for (const close of state.monthlyCloses || []) {
+    if (!Array.isArray(close.caseIds) || close.caseIds.some((id) => !hasText(id))) return `月結紀錄 ${close.id} 的案件清單格式不正確。`;
+  }
+
+  if ((state.auditEvents || []).some((event) => !isRecord(event))) return "操作紀錄含有損壞資料。";
+  return "";
+}
+
 export function parseBackup(text) {
   let payload;
   try {
@@ -58,6 +135,9 @@ export function parseBackup(text) {
   if (payload.state.meta !== undefined && (!payload.state.meta || typeof payload.state.meta !== "object" || Array.isArray(payload.state.meta))) {
     return { ok: false, error: "備份中的儲存資訊格式不正確，未進行匯入。" };
   }
+
+  const recordError = validateStateRecords(payload.state);
+  if (recordError) return { ok: false, error: `${recordError} 未進行匯入。` };
 
   try {
     payload = { ...payload, state: prepareState(payload.state) };

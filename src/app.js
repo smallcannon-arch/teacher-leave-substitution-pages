@@ -6,28 +6,30 @@ import {
   REASON_CODES,
   burdenLabel,
   leaveLabel,
-} from "./rules.js?v=0.4.7";
+} from "./rules.js?v=0.4.8";
 import {
   allocationBalance,
   calculateCase,
   caseTotals,
   RULE_VERSION,
   roundMoney,
-} from "./calculator.js?v=0.4.7";
-import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.7";
-import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.7";
-import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.7";
-import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.7";
-import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.7";
-import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.7";
-import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.7";
-import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.7";
-import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.7";
-import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.7";
-import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.7";
-import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.7";
-import { GoogleCloudService } from "./google-cloud.js?v=0.4.7";
-import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.7";
+  validateAllocationRows,
+  validateCaseNumericInputs,
+} from "./calculator.js?v=0.4.8";
+import { demoState, emptyState, localStorageAdapter, newId } from "./storage.js?v=0.4.8";
+import { parseRosterText, rosterTemplate } from "./importer.js?v=0.4.8";
+import { collectSignInSheetRows, isSignInSheetPeriod } from "./sign-in-sheet.js?v=0.4.8";
+import { buildMonthlyExportRows, monthlyRowsToCsv } from "./monthly-export.js?v=0.4.8";
+import { selectMonthlyCases } from "./monthly-selection.js?v=0.4.8";
+import { activeMonthlyClose, applyMonthClose, applyMonthUnlock, lockedMonthsForCase } from "./monthly-close.js?v=0.4.8";
+import { isReadableCaseNumber, nextCaseNumber } from "./case-number.js?v=0.4.8";
+import { backupFilename, createBackup, parseBackup } from "./backup.js?v=0.4.8";
+import { calculationInputSignature, invalidateCaseCalculation, invalidateIfCalculationInputChanged } from "./case-integrity.js?v=0.4.8";
+import { localIsoDate, localIsoMonth } from "./date-utils.js?v=0.4.8";
+import { APP_CONFIG, requiresCloudLogin } from "./app-config.js?v=0.4.8";
+import { APP_NAME, APP_VERSION, COPYRIGHT_NOTICE, DRIVE_CONNECTION_REASON, SUPPORT_EMAIL, buildErrorReportText, buildSupportMailto } from "./support.js?v=0.4.8";
+import { GoogleCloudService } from "./google-cloud.js?v=0.4.8";
+import { availableCaseMonths, casesForOverview, draftFingerprint, filterCaseList, friendlyRuleVersion, isDraftDirty } from "./ui-state.js?v=0.4.8";
 
 const app = document.querySelector("#app");
 let state = localStorageAdapter.load();
@@ -94,6 +96,18 @@ function option(value, label, selected) {
 
 function formatMoney(value) {
   return new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 2 }).format(Number(value || 0));
+}
+
+function feeRateText(fee = {}) {
+  if (fee.type === "homeroom_allowance" && fee.monthlyRate && fee.daysInMonth) {
+    return `${formatMoney(fee.monthlyRate)} ÷ ${fee.daysInMonth}`;
+  }
+  return formatMoney(fee.unitRate);
+}
+
+function monthlyQuantityRateText(row = {}) {
+  if (row.calculationNote) return row.calculationNote;
+  return `${formatMoney(row.quantity)} ${row.unit || ""} × ${formatMoney(row.unitRate)}`;
 }
 
 function formatDateTime(value) {
@@ -193,7 +207,7 @@ function defaultPublicFundSource(preferredId = "") {
 function savedTimeText() {
   const value = state.meta?.lastSavedAt;
   const driveMode = state.meta?.storageMode === "drive" && cloudUi.connected;
-  if (driveMode && ["error", "reauthorization-needed"].includes(cloudUi.phase)) return "Drive 同步待處理・修改已存於本機";
+  if (driveMode && ["error", "conflict", "reauthorization-needed"].includes(cloudUi.phase)) return "Drive 同步待處理・修改已存於本機";
   if (!value) return driveMode ? "Google Drive 資料已載入" : "本機資料已載入";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return driveMode ? "Google Drive 已同步" : "本機已儲存";
@@ -220,7 +234,7 @@ function accountButtonText() {
   if (!cloudUi.profile) return "Google 登入";
   const name = cloudUi.profile.name || cloudUi.profile.email || "Google 帳號";
   if (cloudUi.phase === "authorizing-drive") return `${name}・重新連接中`;
-  if (["error", "reauthorization-needed"].includes(cloudUi.phase)) return `${name}・同步待處理`;
+  if (["error", "conflict", "reauthorization-needed"].includes(cloudUi.phase)) return `${name}・同步待處理`;
   return cloudUi.connected ? `${name}・已連接` : `${name}・連接 Drive`;
 }
 
@@ -621,7 +635,7 @@ function renderCalculation(c) {
       <div class="table-wrap">
         <table><thead><tr><th>費用項目</th><th>領款人</th><th>數量</th><th>單價</th><th>費用負擔</th><th>金額</th><th>規則／法源</th></tr></thead>
         <tbody>${calc.feeItems.length ? calc.feeItems.map((fee) => `
-          <tr><td><strong>${fee.type === "course_hourly" ? "課務代課鐘點費" : fee.type === "homeroom_allowance" ? "代理導師職務加給" : "代理導師鐘點費"}</strong>${fee.manual ? '<br /><span class="badge manual">人工認定</span>' : ""}</td><td>${escapeHtml(personName(fee.payeeId))}</td><td>${formatMoney(fee.quantity)} ${fee.type === "homeroom_allowance" ? "日" : "節"}</td><td>${formatMoney(fee.unitRate)}</td><td>${burdenBadge(fee.burden)}</td><td class="amount">${formatMoney(fee.amount)} 元</td><td><div>${escapeHtml(fee.ruleTitle)}</div><div class="rule-source">${escapeHtml(fee.source)}</div>${fee.stopPaymentNote ? `<div class="notice warning">${escapeHtml(fee.stopPaymentNote)}</div>` : ""}</td></tr>
+          <tr><td><strong>${fee.type === "course_hourly" ? "課務代課鐘點費" : fee.type === "homeroom_allowance" ? "代理導師職務加給" : "代理導師鐘點費"}</strong>${fee.manual ? '<br /><span class="badge manual">人工認定</span>' : ""}</td><td>${escapeHtml(personName(fee.payeeId))}</td><td>${formatMoney(fee.quantity)} ${fee.type === "homeroom_allowance" ? "日" : "節"}</td><td>${escapeHtml(feeRateText(fee))}</td><td>${burdenBadge(fee.burden)}</td><td class="amount">${formatMoney(fee.amount)} 元</td><td><div>${escapeHtml(fee.ruleTitle)}</div><div class="rule-source">${escapeHtml(fee.source)}</div>${fee.calculationNote ? `<div class="rule-source">計算：${escapeHtml(fee.calculationNote)}</div>` : ""}${fee.stopPaymentNote ? `<div class="notice warning">${escapeHtml(fee.stopPaymentNote)}</div>` : ""}</td></tr>
           ${fee.burden === BURDEN.PUBLIC ? `<tr><td colspan="7">${renderAllocationBox(c, fee)}</td></tr>` : ""}`
         ).join("") : `<tr><td colspan="7" class="empty">目前沒有會發生金額的費用項目。</td></tr>`}</tbody></table>
       </div>
@@ -787,7 +801,7 @@ function renderMonthly() {
         </div>
         <div class="card-header"><div><h2>費用明細</h2><p>列印供送核的月結報表，或下載可用試算表開啟的 CSV 明細。</p></div><div class="button-row screen-only"><button class="btn btn-secondary" id="print-monthly" ${canExport ? "" : "disabled"}>列印月結報表</button><button class="btn btn-secondary" id="export-monthly" ${canExport ? "" : "disabled"}>下載明細 CSV</button>${monthClose ? '<button class="btn btn-danger" id="unlock-month">解鎖月結</button>' : `<button class="btn btn-primary" id="close-month" ${canExport ? "" : "disabled"}>完成月結並鎖定</button>`}</div></div>
         <div class="backup-inline-hint screen-only"><div class="backup-hint-icon">備</div><div><strong>月結完成後，建議保留一份「完整備份」</strong><span>列印時系統會提醒下載。完整備份可匯入復原資料；CSV 只能查看明細，不能還原系統。</span></div></div>
-        <div class="table-wrap"><table class="monthly-print-table"><thead><tr><th>日期</th><th>班級</th><th>費用項目</th><th>領款人</th><th>數量／單價</th><th>負擔</th><th>金額</th></tr></thead><tbody>${exportRows.map((row) => `<tr><td>${escapeHtml(row.dates || "—")}</td><td>${escapeHtml(row.classes || "—")}</td><td>${escapeHtml(row.feeType)}${row.manual ? ' <span class="badge manual">人工</span>' : ""}<small>${escapeHtml(row.caseId)}</small></td><td>${escapeHtml(row.payeeName)}</td><td>${formatMoney(row.quantity)} ${escapeHtml(row.unit)} × ${formatMoney(row.unitRate)}</td><td>${burdenBadge(row.burdenCode)}</td><td class="amount">${formatMoney(row.amount)} 元</td></tr>`).join("") || '<tr><td colspan="7" class="empty">本月尚無已試算費用。</td></tr>'}</tbody></table></div>
+        <div class="table-wrap"><table class="monthly-print-table"><thead><tr><th>日期</th><th>班級</th><th>費用項目</th><th>領款人</th><th>數量／單價</th><th>負擔</th><th>金額</th></tr></thead><tbody>${exportRows.map((row) => `<tr><td>${escapeHtml(row.dates || "—")}</td><td>${escapeHtml(row.classes || "—")}</td><td>${escapeHtml(row.feeType)}${row.manual ? ' <span class="badge manual">人工</span>' : ""}<small>${escapeHtml(row.caseId)}</small></td><td>${escapeHtml(row.payeeName)}</td><td>${escapeHtml(monthlyQuantityRateText(row))}</td><td>${burdenBadge(row.burdenCode)}</td><td class="amount">${formatMoney(row.amount)} 元</td></tr>`).join("") || '<tr><td colspan="7" class="empty">本月尚無已試算費用。</td></tr>'}</tbody></table></div>
         <div class="monthly-print-summary">公費 ${formatMoney(data.totals.public)} 元　／　自費 ${formatMoney(data.totals.self)} 元　／　合計 ${formatMoney(data.totals.public + data.totals.self)} 元</div>
         <div class="approval-lines print-only"><span>承辦人：________________</span><span>覆核：________________</span><span>單位主管：________________</span></div>
       </div>
@@ -805,7 +819,7 @@ function renderAdminAccountsCard() {
   if (adminAccountUi.loading) content = '<div class="empty">正在讀取登入帳號…</div>';
   else if (adminAccountUi.error) content = `<div class="notice danger">${escapeHtml(adminAccountUi.error)}</div>`;
   else if (adminAccountUi.loaded) {
-    content = `<div class="table-wrap admin-account-table"><table><thead><tr><th>帳號</th><th>學校名稱（使用者填報）</th><th>教育網域</th><th>最近登入</th><th>狀態</th><th></th></tr></thead><tbody>${adminAccountUi.accounts.map((account) => {
+    content = `<div class="table-wrap admin-account-table"><table><thead><tr><th>帳號</th><th>學校名稱（使用者填報）</th><th>教育網域</th><th>最近活動</th><th>狀態</th><th></th></tr></thead><tbody>${adminAccountUi.accounts.map((account) => {
       const protectedAccount = account.protected === true;
       const enabled = account.enabled !== false;
       const hasSchoolName = Boolean(account.school_name?.trim());
@@ -928,17 +942,20 @@ function renderModal() {
     if (cloudUi.connected && cloudUi.profile) {
       const needsReconnect = cloudUi.phase === "reauthorization-needed";
       const reconnecting = cloudUi.phase === "authorizing-drive";
-      const needsAttention = needsReconnect || reconnecting || cloudUi.phase === "error";
+      const hasConflict = cloudUi.phase === "conflict";
+      const needsAttention = needsReconnect || reconnecting || hasConflict || cloudUi.phase === "error";
       const connectionMessage = needsReconnect
         ? "Drive 連線已到期；修改仍保存在本機。按下重新連接後，系統會補同步待處理資料。"
         : reconnecting
           ? "正在重新連接 Google Drive，完成後會自動補同步待處理資料。"
-        : cloudUi.phase === "error"
-          ? (cloudUi.message || "Drive 同步暫時失敗；修改仍保存在本機，系統會在後續修改時重試。")
-          : "已自動讀取個人 Drive 主檔；每次新增或修改仍先存本機，再自動同步至 Drive。";
-      accountAction = `<div class="cloud-profile ${needsAttention ? "" : "connected"}"><div><strong>${escapeHtml(cloudUi.profile.name || cloudUi.profile.email)}</strong><span>${escapeHtml(cloudUi.profile.email)}</span></div><span class="badge ${needsAttention ? "pending" : "ready"}">${needsReconnect ? "待重新連接" : reconnecting ? "重新連接中" : needsAttention ? "同步待處理" : "Drive 已連接"}</span></div>
+          : hasConflict
+            ? (cloudUi.message || "Drive 主檔已有其他修改；本機資料已保留，請重新整理後比對版本。")
+          : cloudUi.phase === "error"
+            ? (cloudUi.message || "Drive 同步暫時失敗；修改仍保存在本機，系統會在後續修改時重試。")
+            : "已自動讀取個人 Drive 主檔；每次新增或修改仍先存本機，再自動同步至 Drive。";
+      accountAction = `<div class="cloud-profile ${needsAttention ? "" : "connected"}"><div><strong>${escapeHtml(cloudUi.profile.name || cloudUi.profile.email)}</strong><span>${escapeHtml(cloudUi.profile.email)}</span></div><span class="badge ${needsAttention ? "pending" : "ready"}">${needsReconnect ? "待重新連接" : reconnecting ? "重新連接中" : hasConflict ? "版本衝突" : needsAttention ? "同步待處理" : "Drive 已連接"}</span></div>
         <div class="notice ${needsAttention ? "warning" : "success"}">${escapeHtml(connectionMessage)}</div>
-        <div class="button-row">${needsReconnect ? `<button class="btn btn-primary" type="button" id="authorize-drive" ${busy ? "disabled" : ""}>重新連接 Drive</button>` : reconnecting ? '<button class="btn btn-primary" type="button" disabled>重新連接中…</button>' : '<button class="btn btn-primary" type="button" data-close-modal>開始使用</button>'}<button class="btn btn-secondary" type="button" id="google-sign-out">登出</button></div>`;
+        <div class="button-row">${needsReconnect ? `<button class="btn btn-primary" type="button" id="authorize-drive" ${busy ? "disabled" : ""}>重新連接 Drive</button>` : reconnecting ? '<button class="btn btn-primary" type="button" disabled>重新連接中…</button>' : hasConflict ? '<button class="btn btn-primary" type="button" id="reload-drive-conflict">重新整理並比對版本</button>' : '<button class="btn btn-primary" type="button" data-close-modal>開始使用</button>'}<button class="btn btn-secondary" type="button" id="google-sign-out">登出</button></div>`;
     } else if (cloudUi.profile) {
       accountAction = `<div class="cloud-profile"><div><strong>${escapeHtml(cloudUi.profile.name || cloudUi.profile.email)}</strong><span>${escapeHtml(cloudUi.profile.email)}${cloudUi.profile.is_central_admin ? "・中央管理者" : "・教育帳號"}</span></div><span class="badge pending">帳號已確認</span></div>
         <button class="btn btn-primary full-button" type="button" id="authorize-drive" ${busy ? "disabled" : ""}>繼續授權資料儲存</button>
@@ -1147,6 +1164,7 @@ function bindErrorReportModal() {
 
 function bindAccessModal() {
   document.querySelector("#authorize-drive")?.addEventListener("click", () => googleCloud.requestDriveAccess());
+  document.querySelector("#reload-drive-conflict")?.addEventListener("click", () => globalThis.location.reload());
   document.querySelector("#google-sign-out")?.addEventListener("click", signOutFromApp);
   document.querySelector("#retry-google")?.addEventListener("click", () => googleCloud.initialize());
 }
@@ -1392,7 +1410,7 @@ function bindCaseEvents() {
 }
 
 function validateDraft() {
-  const errors = [];
+  const errors = [...validateCaseNumericInputs(draftCase)];
   if (!draftCase.teacherId) errors.push("請選擇請假教師。 ");
   if (!draftCase.startDate || !draftCase.endDate) errors.push("請填寫請假起訖日期。 ");
   if (!draftCase.startTime || !draftCase.endTime) errors.push("請填寫請假起訖時間。 ");
@@ -1487,7 +1505,9 @@ function markReady() {
   }
   if (draftCase.calculation.errors.length) return showToast("仍有規則或排代錯誤，尚不能標記可月結", { assertive: true });
   for (const fee of draftCase.calculation.feeItems.filter((item) => item.burden === BURDEN.PUBLIC)) {
-    if (allocationBalance(fee, allocationRowsFor(draftCase, fee.id)) !== 0) return showToast(`「${fee.ruleTitle}」的公費分攤尚未平衡`);
+    const allowedSourceIds = state.fundSources.filter((source) => source.burdenType !== "self").map((source) => source.id);
+    const allocationErrors = validateAllocationRows(fee, allocationRowsFor(draftCase, fee.id), allowedSourceIds);
+    if (allocationErrors.length) return showToast(`「${fee.ruleTitle}」：${allocationErrors[0]}`, { assertive: true });
   }
   draftCase.status = "ready";
   persistDraftInState();

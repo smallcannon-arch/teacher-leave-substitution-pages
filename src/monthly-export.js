@@ -1,4 +1,4 @@
-import { burdenLabel, leaveLabel } from "./rules.js?v=0.4.7";
+import { burdenLabel, leaveLabel } from "./rules.js?v=0.4.8";
 
 export const MONTHLY_EXPORT_HEADERS = [
   "核算月份",
@@ -15,6 +15,7 @@ export const MONTHLY_EXPORT_HEADERS = [
   "單價",
   "費用負擔",
   "金額",
+  "計算說明",
   "經費來源與分攤",
   "規則依據",
   "原教師超時鐘點費停發註記",
@@ -72,6 +73,7 @@ export function buildMonthlyExportRows(cases = [], month, people = [], fundSourc
           burdenCode: fee.burden,
           burden: burdenLabel(fee.burden),
           amount: Number(fee.amount || 0),
+          calculationNote: fee.calculationNote || "",
           allocationText,
           ruleSource: [fee.ruleTitle, fee.source].filter(Boolean).join("｜"),
           stopPaymentNote: fee.stopPaymentNote || "",
@@ -103,6 +105,7 @@ export function monthlyRowsToCsv(rows = []) {
     row.unitRate,
     row.burden,
     row.amount,
+    row.calculationNote,
     row.allocationText,
     row.ruleSource,
     row.stopPaymentNote,
